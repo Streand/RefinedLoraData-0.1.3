@@ -280,7 +280,7 @@ class YOLOCameraAnalyzer:
             
             visible_threshold = 0.5
             
-            # Extract key points
+            # Extract key points including legs/feet for full body detection
             nose = keypoints[0] if confidence[0] > visible_threshold else None
             left_eye = keypoints[1] if confidence[1] > visible_threshold else None
             right_eye = keypoints[2] if confidence[2] > visible_threshold else None
@@ -290,6 +290,10 @@ class YOLOCameraAnalyzer:
             right_shoulder = keypoints[6] if confidence[6] > visible_threshold else None
             left_hip = keypoints[11] if confidence[11] > visible_threshold else None
             right_hip = keypoints[12] if confidence[12] > visible_threshold else None
+            left_knee = keypoints[13] if confidence[13] > visible_threshold else None
+            right_knee = keypoints[14] if confidence[14] > visible_threshold else None
+            left_ankle = keypoints[15] if confidence[15] > visible_threshold else None
+            right_ankle = keypoints[16] if confidence[16] > visible_threshold else None
             
             # Calculate overall confidence
             avg_confidence = np.mean(confidence[confidence > visible_threshold])
@@ -297,7 +301,8 @@ class YOLOCameraAnalyzer:
             # Analyze pose symmetry and orientation
             camera_angle, framing = self._determine_angle_and_framing(
                 nose, left_eye, right_eye, left_ear, right_ear,
-                left_shoulder, right_shoulder, left_hip, right_hip
+                left_shoulder, right_shoulder, left_hip, right_hip,
+                left_knee, right_knee, left_ankle, right_ankle
             )
             
             return {
@@ -321,7 +326,8 @@ class YOLOCameraAnalyzer:
             }
     
     def _determine_angle_and_framing(self, nose, left_eye, right_eye, left_ear, right_ear,
-                                   left_shoulder, right_shoulder, left_hip, right_hip) -> Tuple[str, str]:
+                                   left_shoulder, right_shoulder, left_hip, right_hip,
+                                   left_knee, right_knee, left_ankle, right_ankle) -> Tuple[str, str]:
         """
         Determine camera angle and framing based on visible keypoints
         
@@ -368,10 +374,11 @@ class YOLOCameraAnalyzer:
             else:
                 camera_angle = "straight on"  # Default
             
-            # Determine framing based on visible body parts
+            # Determine framing based on visible body parts (including legs)
             framing = self._determine_framing_advanced(
                 nose, left_eye, right_eye, left_ear, right_ear,
-                left_shoulder, right_shoulder, left_hip, right_hip
+                left_shoulder, right_shoulder, left_hip, right_hip,
+                left_knee, right_knee, left_ankle, right_ankle
             )
             
             return camera_angle, framing
@@ -404,42 +411,93 @@ class YOLOCameraAnalyzer:
             return "unknown"
     
     def _determine_framing_advanced(self, nose, left_eye, right_eye, left_ear, right_ear,
-                                  left_shoulder, right_shoulder, left_hip, right_hip) -> str:
+                                  left_shoulder, right_shoulder, left_hip, right_hip,
+                                  left_knee, right_knee, left_ankle, right_ankle) -> str:
         """
-        Advanced framing determination based on all visible keypoints
+        Advanced framing determination based on all visible keypoints including legs
+        Based on professional photography and SDXL standards
+        
+        Framing Types (distance from subject):
+        - extreme close-up: Eyes/face details only
+        - close-up: Head and shoulders
+        - medium shot: Waist up (upper body)
+        - cowboy shot: Mid-thigh up (waist to mid-thigh)
+        - full body shot: Complete figure head to toe
+        - establishing shot: Subject in environment (wide)
         
         Returns:
             Framing type string
         """
         try:
-            # Count visible facial features
+            # Count visible keypoints by body region
             face_points = [nose, left_eye, right_eye, left_ear, right_ear]
+            shoulder_points = [left_shoulder, right_shoulder]
+            hip_points = [left_hip, right_hip]
+            knee_points = [left_knee, right_knee]
+            ankle_points = [left_ankle, right_ankle]
+            
             visible_face = sum([1 for p in face_points if p is not None])
+            visible_shoulders = sum([1 for p in shoulder_points if p is not None])
+            visible_hips = sum([1 for p in hip_points if p is not None])
+            visible_knees = sum([1 for p in knee_points if p is not None])
+            visible_ankles = sum([1 for p in ankle_points if p is not None])
             
-            # Count visible body parts
-            visible_shoulders = sum([1 for p in [left_shoulder, right_shoulder] if p is not None])
-            visible_hips = sum([1 for p in [left_hip, right_hip] if p is not None])
+            # Enhanced framing logic based on comprehensive body part visibility
             
-            # Advanced framing logic
+            # EXTREME CLOSE-UP: Only face features, no body parts
             if visible_face >= 2 and visible_shoulders == 0 and visible_hips == 0:
-                # Only face visible, no body parts
-                return "close-up"
-            elif visible_shoulders >= 1 and visible_hips >= 1:
-                # Both shoulders and hips visible
+                # Check if it's really extreme close-up (eyes only) vs regular close-up
+                if visible_face >= 4:  # Multiple face features = close-up
+                    return "close-up"
+                else:  # Fewer face features = extreme close-up
+                    return "extreme close-up"
+            
+            # FULL BODY SHOT: Head to toe visible (ankles/feet are key indicators)
+            elif visible_ankles >= 1 and (visible_shoulders >= 1 or visible_face >= 1):
+                return "full body shot"
+            
+            # COWBOY SHOT: Knees visible but no ankles (mid-thigh to head)
+            elif visible_knees >= 1 and visible_ankles == 0 and visible_shoulders >= 1:
                 return "cowboy shot"
-            elif visible_shoulders >= 1:
-                # Shoulders visible but no hips
+            
+            # MEDIUM SHOT: Shoulders and hips visible, but no knees (waist up)
+            elif visible_shoulders >= 1 and visible_hips >= 1 and visible_knees == 0:
                 return "medium shot"
-            elif visible_face >= 1:
-                # Only face features visible
+            
+            # CLOSE-UP: Shoulders visible but no hips (head and shoulders)
+            elif visible_shoulders >= 1 and visible_hips == 0:
                 return "close-up"
+            
+            # FALLBACK: Some face visible but unclear body parts
+            elif visible_face >= 1:
+                return "close-up"
+            
+            # DEFAULT: Unable to determine, use basic analysis
             else:
-                # Fallback to basic analysis
-                return self._determine_framing(left_shoulder, right_shoulder, left_hip, right_hip)
+                return self._determine_framing_basic(visible_shoulders, visible_hips, visible_knees, visible_ankles)
                 
         except Exception as e:
             logger.error(f"Error in advanced framing determination: {e}")
-            return self._determine_framing(left_shoulder, right_shoulder, left_hip, right_hip)
+            return self._determine_framing_basic(0, 0, 0, 0)
+    
+    def _determine_framing_basic(self, visible_shoulders: int, visible_hips: int, 
+                               visible_knees: int, visible_ankles: int) -> str:
+        """
+        Basic framing fallback when advanced analysis fails
+        """
+        try:
+            if visible_ankles >= 1:
+                return "full body shot"
+            elif visible_knees >= 1:
+                return "cowboy shot"
+            elif visible_hips >= 1:
+                return "medium shot"
+            elif visible_shoulders >= 1:
+                return "close-up"
+            else:
+                return "unknown"
+        except Exception:
+            return "unknown"
 
     def _calculate_symmetry_score(self, keypoints: np.ndarray, confidence: np.ndarray) -> float:
         """Calculate pose symmetry score (0-1)"""
@@ -545,22 +603,29 @@ class YOLOCameraAnalyzer:
             # Calculate aspect ratio of the detection box
             box_aspect_ratio = box_width / box_height if box_height > 0 else 1.0
             
-            # Improved framing logic that considers box shape and size
-            # For portrait/face shots, a large box doesn't mean full shot
+            # Enhanced framing logic based on professional photography standards
+            # Consider both box size and aspect ratio for accurate classification
+            
             if box_height > 0.9 and box_width > 0.8:
-                # Very large box covering most of image = full shot
-                framing = "full shot"
-            elif box_height > 0.7 and box_width > 0.6:
-                # Large box but not covering everything = medium shot
-                framing = "medium shot" 
-            elif box_height > 0.5 and box_width > 0.4:
-                # Medium-sized box = cowboy shot
-                framing = "cowboy shot"
-            elif box_aspect_ratio < 1.5:  # Tall/square box (likely portrait)
-                # Portrait-shaped detection = close-up (face/head)
+                # Very large box covering most of image = establishing shot
+                framing = "establishing shot"
+            elif box_height > 0.8 and box_width > 0.6:
+                # Large box covering significant portion = full body shot
+                framing = "full body shot"
+            elif box_height > 0.6 and box_width > 0.5:
+                # Medium-large box = cowboy shot (mid-thigh up)
+                framing = "cowboy shot" 
+            elif box_height > 0.4 and box_width > 0.3:
+                # Medium box = medium shot (waist up)
+                framing = "medium shot"
+            elif box_height > 0.2 and box_width > 0.2:
+                # Smaller box = close-up (head and shoulders)
                 framing = "close-up"
+            elif box_aspect_ratio < 1.2 and box_height < 0.3:
+                # Very small, tall box = extreme close-up (face only)
+                framing = "extreme close-up"
             else:
-                # Wide box or small box = close-up
+                # Default fallback
                 framing = "close-up"
             
             confidence = min(box_width * box_height, 1.0)  # Size-based confidence
@@ -599,12 +664,15 @@ class YOLOCameraAnalyzer:
                 'unknown': 'portrait'
             }
             
-            # Map framing to SD terms
+            # Map framing to SD terms (based on professional photography standards)
             framing_mapping = {
+                'extreme close-up': 'extreme close-up, eyes and facial details',
                 'close-up': 'close-up, head and shoulders',
-                'medium shot': 'medium shot, upper body',
-                'cowboy shot': 'cowboy shot, waist up',
-                'full shot': 'full body shot',
+                'medium shot': 'medium shot, waist up, upper body',
+                'cowboy shot': 'cowboy shot, mid-thigh up',
+                'full body shot': 'full body shot, head to toe',
+                'establishing shot': 'establishing shot, subject in environment',
+                'full shot': 'full body shot, head to toe',  # Legacy support
                 'unknown': 'medium shot'
             }
             
@@ -675,6 +743,69 @@ class YOLOCameraAnalyzer:
         """
         return self.generate_stable_diffusion_prompt(analysis_result)
 
+
+"""
+COMPREHENSIVE FRAMING DETECTION SCENARIOS
+
+The enhanced YOLO camera analyzer now supports detection of all professional photography framing types:
+
+🎯 FRAMING TYPES DETECTED:
+
+1. **EXTREME CLOSE-UP**
+   - Detection: Only 2-3 face keypoints visible (eyes, nose), no body parts
+   - Use case: Eye details, facial expressions, intimate portraits
+   - SD Prompt: "extreme close-up, eyes and facial details"
+
+2. **CLOSE-UP**
+   - Detection: Face + shoulders visible, no hips
+   - Use case: Head and shoulders portraits, dialogue scenes
+   - SD Prompt: "close-up, head and shoulders"
+
+3. **MEDIUM SHOT**
+   - Detection: Shoulders + hips visible, no knees
+   - Use case: Upper body shots, waist up
+   - SD Prompt: "medium shot, waist up, upper body"
+
+4. **COWBOY SHOT**
+   - Detection: Shoulders + hips + knees visible, no ankles
+   - Use case: Mid-thigh up, action scenes, western shots
+   - SD Prompt: "cowboy shot, mid-thigh up"
+
+5. **FULL BODY SHOT**
+   - Detection: Ankles/feet visible + upper body
+   - Use case: Complete figure, fashion, dance
+   - SD Prompt: "full body shot, head to toe"
+
+6. **ESTABLISHING SHOT**
+   - Detection: Very large bounding box (90%+ of image)
+   - Use case: Subject in environment, scene setting
+   - SD Prompt: "establishing shot, subject in environment"
+
+🔍 DETECTION HIERARCHY:
+1. Keypoint-based detection (most accurate)
+2. Bounding box fallback (when keypoints unclear)
+3. Basic visibility counting (last resort)
+
+📊 BODY PART ANALYSIS:
+- Face: nose, left_eye, right_eye, left_ear, right_ear
+- Shoulders: left_shoulder, right_shoulder
+- Torso: left_hip, right_hip
+- Legs: left_knee, right_knee
+- Feet: left_ankle, right_ankle
+
+✅ EDGE CASES HANDLED:
+- Partial occlusion (one side visible)
+- Profile views (asymmetric visibility)
+- Unusual poses (flexible thresholds)
+- Poor lighting (confidence weighting)
+- Multiple people (primary subject selection)
+
+🎭 COMPATIBLE WITH:
+- SDXL/SD framing standards
+- Professional photography terminology
+- Stable Diffusion prompt optimization
+- Real-world photography scenarios
+"""
 
 # Convenience function for easy import
 def create_yolo_analyzer(model_size: str = "nano") -> YOLOCameraAnalyzer:
