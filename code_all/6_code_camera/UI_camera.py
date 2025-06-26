@@ -14,11 +14,11 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(current_dir)
 
 try:
-    from backend_camera import CameraAnalyzer
+    from backend_camera_yolo import YOLOCameraAnalyzer
     BACKEND_AVAILABLE = True
-    CameraAnalyzer_class = CameraAnalyzer
+    CameraAnalyzer_class = YOLOCameraAnalyzer
 except ImportError as e:
-    print(f"Warning: Could not import camera backend: {e}")
+    print(f"Warning: Could not import YOLO camera backend: {e}")
     BACKEND_AVAILABLE = False
     CameraAnalyzer_class = None
 
@@ -31,26 +31,20 @@ class CameraUI:
         
         # Camera framing and angle reference data
         self.framing_descriptions = {
-            "extreme close-up": "Very tight shot focusing on eyes/face details",
-            "close-up": "Head and shoulders visible, intimate view",
-            "medium shot": "Waist up, good for dialogue and expressions",
-            "full body shot": "Complete figure from head to toe",
-            "establishing shot": "Wide view showing environment and context"
+            "extreme close-up": "Very tight shot focusing on eyes/face details only",
+            "close-up": "Head and shoulders visible, dialogue and portrait scenes",
+            "medium shot": "Waist up, upper body shots for expressions and gestures", 
+            "cowboy shot": "Mid-thigh up, action scenes and western-style shots",
+            "full body shot": "Complete figure from head to toe, fashion and dance",
+            "establishing shot": "Wide view showing subject in environment context",
+            "unknown": "Framing type could not be determined"
         }
         
         self.angle_descriptions = {
-            "straight on": "Camera at eye level, direct view",
-            "bilaterally symmetrical": "Centered, balanced composition",
-            "side view": "Profile view of the subject",
-            "back view": "Camera positioned behind the subject",
-            "from above": "High angle, camera above subject",
-            "from below": "Low angle, camera below subject (hero shot)",
-            "wide angle view": "Distorted perspective, wider field of view",
-            "fisheye view": "Extreme wide angle with barrel distortion",
-            "overhead shot": "Directly above the subject",
-            "top down shot": "Bird's eye view perspective",
-            "hero view": "Low angle making subject appear powerful",
-            "selfie": "Close, personal angle typical of self-portraits"
+            "straight on": "Camera at eye level, direct frontal view",
+            "bilaterally symmetrical": "Centered, balanced composition with slight angle",
+            "side view": "Profile view of the subject from the side",
+            "unknown": "Camera angle could not be determined"
         }
 
     def analyze_single_image(self, image) -> Tuple[str, str, str, str]:
@@ -65,8 +59,8 @@ class CameraUI:
         """
         if not BACKEND_AVAILABLE:
             return (
-                "Backend not available - missing dependencies (cv2, numpy)",
-                "Install required packages: pip install opencv-python numpy",
+                "YOLO backend not available - missing dependencies",
+                "Install required packages: pip install torch torchvision ultralytics",
                 "",
                 ""
             )
@@ -95,7 +89,7 @@ class CameraUI:
             # Format results
             analysis_text = self._format_analysis_result(result)
             framing_info = self._get_framing_info(result.get("framing", ""))
-            angle_info = self._get_angle_info(result.get("angle", ""))
+            angle_info = self._get_angle_info(result.get("camera_angle", ""))
             
             if self.analyzer is not None:
                 sd_prompt = self.analyzer.get_stable_diffusion_prompt(result)
@@ -118,7 +112,7 @@ class CameraUI:
             Tuple of (results_text, csv_data)
         """
         if not BACKEND_AVAILABLE:
-            return "Backend not available - missing dependencies", ""
+            return "YOLO backend not available - missing dependencies", ""
             
         if not folder_path or not os.path.exists(folder_path):
             return "Invalid folder path", ""
@@ -142,28 +136,44 @@ class CameraUI:
             return f"Error in batch analysis: {str(e)}", ""
 
     def _format_analysis_result(self, result: Dict[str, Any]) -> str:
-        """Format single image analysis result"""
-        lines = ["📊 **Image Analysis Results**\n"]
+        """Format single image analysis result for YOLO backend"""
+        lines = ["📊 **YOLO Image Analysis Results**\n"]
         
         if "framing" in result:
             lines.append(f"🎬 **Framing**: {result['framing']}")
             
-        if "angle" in result:
-            lines.append(f"📐 **Camera Angle**: {result['angle']}")
+        if "camera_angle" in result:
+            lines.append(f"📐 **Camera Angle**: {result['camera_angle']}")
             
-        if "aspect_ratio" in result:
-            lines.append(f"📏 **Aspect Ratio**: {result['aspect_ratio']}")
+        if "people_detected" in result:
+            lines.append(f"� **People Detected**: {result['people_detected']}")
             
-        if "composition_notes" in result:
-            lines.append(f"🎨 **Composition**: {result['composition_notes']}")
+        if "confidence" in result:
+            lines.append(f"� **Confidence**: {result['confidence']:.2f}")
             
-        if "image_dimensions" in result:
-            lines.append(f"📐 **Dimensions**: {result['image_dimensions']}")
+        if "inference_time" in result:
+            lines.append(f"⏱️ **Analysis Time**: {result['inference_time']:.2f}s")
+            
+        if "device" in result:
+            lines.append(f"🔧 **Device**: {result['device']}")
+            
+        # Add pose analysis if available
+        if 'pose_analysis' in result and result['pose_analysis']:
+            pose = result['pose_analysis']
+            lines.append("\n🦴 **Pose Analysis**:")
+            if 'visible_keypoints' in pose:
+                lines.append(f"  - Visible Keypoints: {pose['visible_keypoints']}/17")
+            if 'symmetry_score' in pose:
+                lines.append(f"  - Symmetry Score: {pose['symmetry_score']:.2f}")
+            if 'face_visibility' in pose:
+                lines.append(f"  - Face Visibility: {pose['face_visibility']}")
+            if 'body_orientation' in pose:
+                lines.append(f"  - Body Orientation: {pose['body_orientation']}")
             
         return "\n".join(lines)
 
     def _format_batch_results(self, results: Dict[str, Dict]) -> str:
-        """Format batch analysis results"""
+        """Format batch analysis results for YOLO backend"""
         lines = [f"📁 **Batch Analysis Results** ({len(results)} images)\n"]
         
         for filename, result in results.items():
@@ -171,24 +181,26 @@ class CameraUI:
                 lines.append(f"❌ **{filename}**: Error - {result['error']}")
             else:
                 framing = result.get('framing', 'unknown')
-                angle = result.get('angle', 'unknown')
-                lines.append(f"✅ **{filename}**: {framing}, {angle}")
+                camera_angle = result.get('camera_angle', 'unknown')
+                confidence = result.get('confidence', 0.0)
+                lines.append(f"✅ **{filename}**: {framing}, {camera_angle} (conf: {confidence:.2f})")
         
         return "\n".join(lines)
 
     def _generate_csv_data(self, results: Dict[str, Dict]) -> str:
-        """Generate CSV format data for batch results"""
-        lines = ["filename,framing,angle,aspect_ratio,composition_notes,dimensions"]
+        """Generate CSV format data for batch results with YOLO backend"""
+        lines = ["filename,framing,camera_angle,confidence,people_detected,device,inference_time"]
         
         for filename, result in results.items():
             if "error" not in result:
                 row = [
                     filename,
                     result.get('framing', ''),
-                    result.get('angle', ''),
-                    result.get('aspect_ratio', ''),
-                    result.get('composition_notes', ''),
-                    result.get('image_dimensions', '')
+                    result.get('camera_angle', ''),
+                    str(result.get('confidence', '')),
+                    str(result.get('people_detected', '')),
+                    result.get('device', ''),
+                    str(result.get('inference_time', ''))
                 ]
                 lines.append(",".join(row))
         

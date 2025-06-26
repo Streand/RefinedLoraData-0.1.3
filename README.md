@@ -11,4 +11,5 @@ Versions:
 0.1.3 - Camera angel detection Beta = ✅
  - code is functinal
 
-0.1.4 - 
+0.1.4 - Camera angel detection Beta = ✅
+ - removed un-needed code

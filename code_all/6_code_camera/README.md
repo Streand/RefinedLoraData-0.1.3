@@ -73,10 +73,10 @@ python test_camera.py
 
 ### Programmatic Usage
 ```python
-from backend_camera import CameraAnalyzer
+from backend_camera_yolo import YOLOCameraAnalyzer
 
-# Create analyzer
-analyzer = CameraAnalyzer()
+# Create YOLO analyzer
+analyzer = YOLOCameraAnalyzer()
 
 # Analyze single image
 result = analyzer.analyze_image("path/to/image.jpg")

@@ -52,14 +52,6 @@ def create_main_ui():
                         with gr.TabItem("Single Image"):
                             with gr.Row():
                                 with gr.Column():
-                                    # Backend selection
-                                    backend_choice = gr.Radio(
-                                        choices=["OpenCV (Fast)", "YOLO (Accurate)"],
-                                        value="OpenCV (Fast)",
-                                        label="🔧 Analysis Backend",
-                                        info="Choose between speed (OpenCV) or accuracy (YOLO)"
-                                    )
-                                    
                                     image_input = gr.Image(
                                         label="Upload Image for Analysis",
                                         type="pil",
@@ -88,13 +80,10 @@ def create_main_ui():
                                         lines=2
                                     )
                             
-                            # Enhanced analysis function with both backends
-                            def analyze_camera_angle(image, backend_choice):
+                            # YOLO-only analysis function
+                            def analyze_camera_angle(image):
                                 if image is None:
-                                    return "🔍 Backend Check: Ready", "No image uploaded", ""
-                                
-                                # Determine which backend to use
-                                use_yolo = "YOLO" in backend_choice
+                                    return "🔍 YOLO Backend: Ready", "No image uploaded", ""
                                 
                                 try:
                                     # Try to import and use the camera backend
@@ -103,28 +92,17 @@ def create_main_ui():
                                     backend_path = os.path.join(os.path.dirname(__file__), '..', '6_code_camera')
                                     sys.path.append(backend_path)
                                     
-                                    if use_yolo:
-                                        # Try YOLO backend first
-                                        try:
-                                            from backend_camera_yolo import YOLOCameraAnalyzer
-                                            analyzer = YOLOCameraAnalyzer()
-                                            backend_info = f"🚀 **YOLO Backend Active**\n- Device: {analyzer.device}\n- Model: {analyzer.model_size}"
-                                            if analyzer.device == 'cpu':
-                                                backend_info += "\n- ⚠️ Using CPU (GPU not yet supported for Blackwell)"
-                                        except ImportError as e:
-                                            # Fall back to OpenCV if YOLO not available
-                                            from backend_camera import CameraAnalyzer
-                                            analyzer = CameraAnalyzer()
-                                            backend_info = f"⚠️ **Fallback to OpenCV**: YOLO not available ({str(e)})"
-                                        except Exception as e:
-                                            from backend_camera import CameraAnalyzer
-                                            analyzer = CameraAnalyzer()
-                                            backend_info = f"⚠️ **Fallback to OpenCV**: YOLO error ({str(e)})"
-                                    else:
-                                        # Use OpenCV backend
-                                        from backend_camera import CameraAnalyzer
-                                        analyzer = CameraAnalyzer()
-                                        backend_info = "🔧 **OpenCV Backend Active**\n- Fast face detection\n- Basic pose analysis"
+                                    # Use YOLO backend only
+                                    try:
+                                        from backend_camera_yolo import YOLOCameraAnalyzer
+                                        analyzer = YOLOCameraAnalyzer()
+                                        backend_info = f"🚀 **YOLO Backend Active**\n- Device: {analyzer.device}\n- Model: {analyzer.model_size}"
+                                        if analyzer.device == 'cpu':
+                                            backend_info += "\n- ⚠️ Using CPU (GPU not yet supported for Blackwell)"
+                                    except ImportError as e:
+                                        return f"❌ **YOLO Backend Error**: {str(e)}", "YOLO backend not available. Please install: pip install torch torchvision ultralytics", ""
+                                    except Exception as e:
+                                        return f"❌ **YOLO Backend Error**: {str(e)}", f"Error initializing YOLO backend: {str(e)}", ""
                                     
                                     # Save temporary image for analysis
                                     temp_path = "temp_analysis_image.jpg"
@@ -140,10 +118,8 @@ def create_main_ui():
                                     if "error" in result:
                                         return backend_info, f"Error: {result['error']}", ""
                                     
-                                    # Format results with backend-specific enhancements
-                                    if hasattr(analyzer, 'device'):
-                                        # YOLO backend results
-                                        analysis_text = f"""📊 **YOLO Image Analysis Results**
+                                    # Format YOLO analysis results
+                                    analysis_text = f"""📊 **YOLO Image Analysis Results**
 
 🎬 **Framing**: {result.get('framing', 'unknown')}
 📐 **Camera Angle**: {result.get('camera_angle', 'unknown')}
@@ -152,43 +128,31 @@ def create_main_ui():
 ⏱️ **Analysis Time**: {result.get('inference_time', 0.0):.2f}s
 🔧 **Device**: {result.get('device', 'unknown')}"""
 
-                                        # Add pose analysis if available
-                                        if 'pose_analysis' in result:
-                                            pose = result['pose_analysis']
-                                            analysis_text += f"""
+                                    # Add pose analysis if available
+                                    if 'pose_analysis' in result:
+                                        pose = result['pose_analysis']
+                                        analysis_text += f"""
 
 🦴 **Pose Analysis**:
   - Visible Keypoints: {pose.get('visible_keypoints', 0)}/17
   - Symmetry Score: {pose.get('symmetry_score', 0.0):.2f}
   - Face Visibility: {pose.get('face_visibility', 'unknown')}
   - Body Orientation: {pose.get('body_orientation', 'unknown')}"""
-                                    else:
-                                        # OpenCV backend results  
-                                        analysis_text = f"""📊 **OpenCV Image Analysis Results**
-
-🎬 **Framing**: {result.get('framing', 'unknown')}
-📐 **Camera Angle**: {result.get('angle', 'unknown')}
-📏 **Aspect Ratio**: {result.get('aspect_ratio', 'unknown')}
-🎨 **Composition**: {result.get('composition_notes', 'unknown')}
-📐 **Dimensions**: {result.get('image_dimensions', 'unknown')}"""
                                     
                                     sd_prompt = analyzer.get_stable_diffusion_prompt(result)
                                     
                                     return backend_info, analysis_text, sd_prompt
                                     
                                 except ImportError as e:
-                                    error_msg = "📊 Camera analysis module not available."
-                                    if use_yolo:
-                                        error_msg += "\nFor YOLO: pip install torch torchvision ultralytics"
-                                    else:
-                                        error_msg += "\nFor OpenCV: pip install opencv-python numpy"
+                                    error_msg = "📊 YOLO analysis module not available."
+                                    error_msg += "\nPlease install: pip install torch torchvision ultralytics"
                                     return f"❌ **Backend Error**: {str(e)}", error_msg, ""
                                 except Exception as e:
                                     return f"❌ **Backend Error**: {str(e)}", f"📊 Error analyzing image: {str(e)}", ""
                             
                             analyze_btn.click(
                                 fn=analyze_camera_angle,
-                                inputs=[image_input, backend_choice],
+                                inputs=[image_input],
                                 outputs=[backend_status, analysis_output, sd_prompt_output]
                             )
                         

@@ -743,7 +743,32 @@ class YOLOCameraAnalyzer:
         """
         return self.generate_stable_diffusion_prompt(analysis_result)
 
-
+    def analyze_batch(self, image_folder: str) -> Dict[str, Dict]:
+        """
+        Analyze multiple images in a folder
+        
+        Args:
+            image_folder: Path to folder containing images
+            
+        Returns:
+            Dictionary with analysis results for each image
+        """
+        results = {}
+        
+        if not os.path.exists(image_folder):
+            return {"error": {"error": "Folder does not exist"}}
+        
+        # Get all image files
+        image_extensions = ['.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.webp']
+        image_files = [f for f in os.listdir(image_folder) 
+                      if any(f.lower().endswith(ext) for ext in image_extensions)]
+        
+        for image_file in image_files:
+            image_path = os.path.join(image_folder, image_file)
+            results[image_file] = self.analyze_image(image_path)
+            
+        return results
+    
 """
 COMPREHENSIVE FRAMING DETECTION SCENARIOS
 
