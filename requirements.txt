@@ -1,0 +1,43 @@
+
+# UI and visualization
+# gradio>=4.0.0
+gradio #latest stable version
+
+# All Requierments for base insightface 0.7.3
+
+# # PyTorch with CUDA 12.4+ (Blackwell/RTX 5080)
+# Make sure your Python version matches the wheel (cp310 = Python 3.10)
+https://huggingface.co/w-e-w/torch-2.6.0-cu128.nv/resolve/main/torch-2.6.0+cu128.nv-cp310-cp310-win_amd64.whl
+https://huggingface.co/w-e-w/torch-2.6.0-cu128.nv/resolve/main/torchvision-0.20.0a0+cu128.nv-cp310-cp310-win_amd64.whl
+
+    
+# Main requirements for insightface
+insightface
+scipy
+opencv-python
+requests
+tqdm
+numpy<2.0.0
+onnxruntime-gpu>=1.17.0
+
+# Optional/extra dependencies (for some features)
+Pillow
+matplotlib
+scikit-learn
+scikit-image
+dlib
+onnx
+transformers>=4.30.0
+nudenet
+mediapipe
+
+nsfw-detector
+NudeNetClassifier
+
+# Your existing NudeNet should already be installed
+
+tensorflow>=2.8.0
+tensorflow-hub>=0.12.0
+
+
+
