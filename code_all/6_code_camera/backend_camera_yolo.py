@@ -8,12 +8,20 @@ import os
 import time
 import torch
 import numpy as np
-from typing import Dict, List, Tuple, Optional, Union
+from typing import Dict, List, Tuple, Optional, Union, Any
 import logging
 from pathlib import Path
 
 # Set up logging
 logger = logging.getLogger(__name__)
+
+# Type hint for YOLO model (imported dynamically)
+try:
+    from ultralytics import YOLO
+    from ultralytics.engine.results import Results
+except ImportError:
+    YOLO = None
+    Results = None
 
 class YOLOCameraAnalyzer:
     """
@@ -28,7 +36,7 @@ class YOLOCameraAnalyzer:
         Args:
             model_size: YOLO model size ("nano", "small", "medium", "large", "extra_large")
         """
-        self.model = None
+        self.model: Optional[Any] = None
         self.device = self._setup_device()
         self.model_size = model_size
         self.is_initialized = False
@@ -102,7 +110,10 @@ class YOLOCameraAnalyzer:
             
             # Test model with dummy data
             dummy_image = np.random.randint(0, 255, (640, 640, 3), dtype=np.uint8)
-            test_results = self.model(dummy_image, device=self.device, verbose=False)
+            if self.model is not None:
+                test_results = self.model(dummy_image, device=self.device, verbose=False)
+            else:
+                raise RuntimeError("Model is None after loading")
             
             self.is_initialized = True
             logger.info(f"✅ YOLO model loaded successfully on {self.device}")
@@ -148,7 +159,10 @@ class YOLOCameraAnalyzer:
             
             start_time = time.time()
             
-            # Run YOLO inference
+            # Run YOLO inference with null check
+            if self.model is None:
+                raise RuntimeError("YOLO model is not initialized")
+            
             results = self.model(image_path, device=self.device, verbose=False)
             
             inference_time = time.time() - start_time

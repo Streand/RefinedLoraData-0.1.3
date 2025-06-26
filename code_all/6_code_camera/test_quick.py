@@ -6,15 +6,16 @@ import os
 import sys
 from pathlib import Path
 
+# Add the root project directory to Python path
+project_root = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(project_root))
+
 def test_ui_import():
     """Test that the main UI can be imported and created"""
     print("🧪 Testing Main UI Import...")
     
     try:
-        # Add main app to path
-        main_app_path = os.path.join(os.path.dirname(__file__), '..', '1_code_main_app')
-        sys.path.append(main_app_path)
-        
+        # Import using direct module access (VS Code should now find this)
         from UI_main import create_main_ui
         print("✅ Main UI imported successfully")
         
@@ -27,7 +28,17 @@ def test_ui_import():
         
     except Exception as e:
         print(f"❌ Main UI test failed: {e}")
-        return False
+        # Fallback to old method
+        try:
+            main_app_path = os.path.join(os.path.dirname(__file__), '..', '1_code_main_app')
+            sys.path.append(main_app_path)
+            from UI_main import create_main_ui  # type: ignore
+            interface = create_main_ui()
+            print("✅ Main UI imported successfully (fallback method)")
+            return True
+        except Exception as e2:
+            print(f"❌ Fallback also failed: {e2}")
+            return False
 
 def test_backend_imports():
     """Test that both backends can be imported"""

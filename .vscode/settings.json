@@ -1,0 +1,16 @@
+{
+    "python.analysis.extraPaths": [
+        ".",
+        "./code_all",
+        "./code_all/1_code_main_app",
+        "./code_all/2_code_vid",
+        "./code_all/3_code_face",
+        "./code_all/4_code_body",
+        "./code_all/5_code_pose",
+        "./code_all/6_code_camera",
+        "./code_all/7_code_clothing",
+        "./code_all/8_code_nsfw",
+        "./code_all/9_code_finalize"
+    ],
+    "python.defaultInterpreterPath": "./venv/Scripts/python.exe"
+}
