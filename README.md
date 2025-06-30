@@ -13,3 +13,9 @@ Versions:
 
 0.1.4 - Camera angel detection Beta = ✅
  - removed un-needed code
+
+0.1.5 - Camera angel detection Beta = ✅
+ - added batch option
+ - save folder option
+ - open folder option
+
