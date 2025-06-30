@@ -3,12 +3,16 @@
 # gradio>=4.0.0
 gradio #latest stable version
 
-# All Requierments for base insightface 0.7.3
+# PyTorch 2.7.0 with CUDA 12.8 (Modern Blackwell/RTX 5000 series support)
+# Using official PyTorch wheels (A1111 approach) instead of Early Access
+torch==2.7.0
+torchvision==0.22.0
+torchaudio==2.7.0
+--extra-index-url https://download.pytorch.org/whl/cu128
 
-# # PyTorch with CUDA 12.4+ (Blackwell/RTX 5080)
-# Make sure your Python version matches the wheel (cp310 = Python 3.10)
-https://huggingface.co/w-e-w/torch-2.6.0-cu128.nv/resolve/main/torch-2.6.0+cu128.nv-cp310-cp310-win_amd64.whl
-https://huggingface.co/w-e-w/torch-2.6.0-cu128.nv/resolve/main/torchvision-0.20.0a0+cu128.nv-cp310-cp310-win_amd64.whl
+# Legacy Early Access wheels (kept for reference, uncomment if needed)
+# https://huggingface.co/w-e-w/torch-2.6.0-cu128.nv/resolve/main/torch-2.6.0+cu128.nv-cp310-cp310-win_amd64.whl
+# https://huggingface.co/w-e-w/torch-2.6.0-cu128.nv/resolve/main/torchvision-0.20.0a0+cu128.nv-cp310-cp310-win_amd64.whl
 
     
 # Main requirements for insightface

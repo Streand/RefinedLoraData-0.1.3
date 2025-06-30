@@ -19,3 +19,6 @@ Versions:
  - save folder option
  - open folder option
 
+0.2.5 - Camera angel detection = ✅
+ - fixed rest of code for camera angel
+ - added support for blackwell (nvidia 5000 series card)

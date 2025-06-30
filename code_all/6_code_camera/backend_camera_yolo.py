@@ -1,7 +1,7 @@
 """
 YOLO-based Camera Angle Detection Backend
 Provides advanced pose detection for camera angle and framing analysis
-Compatible with Blackwell NVIDIA GPUs (will auto-upgrade when PyTorch supports sm_120)
+Compatible with Blackwell NVIDIA GPUs using modern PyTorch 2.7.0+cu128 approach
 """
 
 import os
@@ -11,6 +11,26 @@ import numpy as np
 from typing import Dict, List, Tuple, Optional, Union, Any
 import logging
 from pathlib import Path
+import sys
+
+# Import Blackwell GPU support
+try:
+    # Add project root to path for blackwell_support import
+    project_root = os.path.join(os.path.dirname(__file__), '..', '..')
+    if project_root not in sys.path:
+        sys.path.append(project_root)
+    from blackwell_support import get_optimal_device, verify_pytorch_blackwell_support, get_gpu_info
+    blackwell_support_available = True
+except ImportError as e:
+    blackwell_support_available = False
+    print(f"Warning: Blackwell support module not available: {e}")
+    # Define placeholder functions
+    def get_optimal_device():
+        return 'cpu'
+    def verify_pytorch_blackwell_support():
+        return False, "Blackwell support module not available"
+    def get_gpu_info():
+        return {'is_blackwell': False, 'is_rtx_5000_series': False, 'sm_count': 0, 'name': 'Unknown'}
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -45,6 +65,7 @@ class YOLOCameraAnalyzer:
     def _setup_device(self) -> str:
         """
         Setup optimal device for inference with Blackwell GPU detection
+        Uses the blackwell_support module for modern RTX 5000 series support
         
         Returns:
             Device string ('cuda' or 'cpu')
@@ -53,25 +74,51 @@ class YOLOCameraAnalyzer:
             logger.info("CUDA not available, using CPU")
             return 'cpu'
         
+        # Use blackwell_support module if available
+        if blackwell_support_available:
+            try:
+                device = get_optimal_device()
+                supported, message = verify_pytorch_blackwell_support()
+                
+                if device == 'cuda':
+                    logger.info(f"✅ GPU acceleration enabled: {message}")
+                else:
+                    logger.warning(f"⚠️ Using CPU: {message}")
+                    
+                # Log GPU info for debugging
+                gpu_info = get_gpu_info()
+                if gpu_info['is_blackwell']:
+                    logger.info(f"Blackwell GPU detected: {gpu_info['name']} (~{gpu_info['sm_count']} SMs)")
+                    if gpu_info['is_rtx_5000_series']:
+                        logger.info("RTX 5000 series detected - optimized for 120 SM configuration")
+                
+                return device
+                
+            except Exception as e:
+                logger.warning(f"Error using blackwell_support module: {e}")
+                # Fall back to legacy detection
+        
+        # Legacy device detection (fallback)
         try:
             # Check GPU compatibility
             gpu_name = torch.cuda.get_device_name(0)
             major, minor = torch.cuda.get_device_capability(0)
             
             # Blackwell GPU detection
-            if "RTX 50" in gpu_name or "B" in gpu_name or major >= 9:
+            if "RTX 50" in gpu_name or "B" in gpu_name or major >= 12:
                 logger.info(f"Blackwell GPU detected: {gpu_name}")
                 
                 # Test if PyTorch supports Blackwell yet
                 try:
                     test_tensor = torch.randn(1, device='cuda')
+                    result = test_tensor * 2  # Simple operation to test kernel support
                     logger.info("✅ Blackwell GPU support available! Using GPU acceleration")
                     return 'cuda'
                 except Exception as e:
                     if "kernel image" in str(e).lower() or "sm_120" in str(e):
-                        logger.warning("⚠️  Blackwell GPU detected but not yet supported by PyTorch")
+                        logger.warning("⚠️ Blackwell GPU detected but not yet supported by PyTorch")
                         logger.warning("   Using CPU inference until PyTorch adds sm_120 support")
-                        logger.info("   Performance will be significantly faster once GPU support is added")
+                        logger.info("   Consider upgrading to PyTorch 2.7.0+cu128 for Blackwell support")
                     else:
                         logger.warning(f"GPU error: {e}")
                     return 'cpu'
@@ -87,6 +134,7 @@ class YOLOCameraAnalyzer:
     def _load_model(self) -> bool:
         """
         Load YOLO pose detection model
+        Prioritizes local models in the camera folder before downloading
         
         Returns:
             True if model loaded successfully
@@ -103,9 +151,41 @@ class YOLOCameraAnalyzer:
                 "extra_large": "yolo11x-pose.pt"
             }
             
-            model_path = model_map.get(self.model_size, "yolo11n-pose.pt")
+            model_filename = model_map.get(self.model_size, "yolo11n-pose.pt")
             
-            logger.info(f"Loading YOLO model: {model_path}")
+            # First, check for model in the current camera folder
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            local_model_path = os.path.join(current_dir, model_filename)
+            
+            if os.path.exists(local_model_path):
+                logger.info(f"Loading local YOLO model: {local_model_path}")
+                model_path = local_model_path
+            else:
+                # Check for alternative local models if exact match not found
+                available_models = []
+                for filename in os.listdir(current_dir):
+                    if filename.endswith('-pose.pt') or filename.endswith('.pt'):
+                        available_models.append(filename)
+                
+                if available_models:
+                    # Use the first available pose model, prioritizing yolo11n-pose.pt
+                    if "yolo11n-pose.pt" in available_models:
+                        model_path = os.path.join(current_dir, "yolo11n-pose.pt")
+                        logger.info(f"Using available local model: yolo11n-pose.pt")
+                    elif any("pose" in model for model in available_models):
+                        pose_model = next(model for model in available_models if "pose" in model)
+                        model_path = os.path.join(current_dir, pose_model)
+                        logger.info(f"Using available local pose model: {pose_model}")
+                    else:
+                        # Fall back to any available model
+                        model_path = os.path.join(current_dir, available_models[0])
+                        logger.info(f"Using available local model: {available_models[0]}")
+                else:
+                    # No local models found, will download
+                    logger.info(f"No local models found, downloading: {model_filename}")
+                    model_path = model_filename
+            
+            logger.info(f"Loading YOLO model from: {model_path}")
             self.model = YOLO(model_path)
             
             # Test model with dummy data
@@ -697,6 +777,7 @@ class YOLOCameraAnalyzer:
     def get_device_info(self) -> Dict:
         """
         Get information about the current device and YOLO model status
+        Includes Blackwell GPU detection and support status
         
         Returns:
             Dictionary with device and model information
@@ -716,14 +797,34 @@ class YOLOCameraAnalyzer:
                 major, minor = torch.cuda.get_device_capability(0)
                 info['compute_capability'] = f"{major}.{minor}"
                 
-                # Blackwell detection
-                gpu_name = info['gpu_name']
-                if "RTX 50" in gpu_name or "B" in gpu_name or major >= 9:
-                    info['is_blackwell'] = True
-                    info['blackwell_support'] = self.device == 'cuda'
+                # Use blackwell_support module if available
+                if blackwell_support_available:
+                    try:
+                        gpu_info = get_gpu_info()
+                        supported, support_message = verify_pytorch_blackwell_support()
+                        
+                        info['is_blackwell'] = gpu_info['is_blackwell']
+                        info['is_rtx_5000_series'] = gpu_info['is_rtx_5000_series']
+                        info['sm_count'] = gpu_info['sm_count']
+                        info['blackwell_support'] = supported
+                        info['support_message'] = support_message
+                        
+                        if gpu_info['is_rtx_5000_series']:
+                            info['optimization_notes'] = "Optimized for 120 SM configuration"
+                        
+                    except Exception as e:
+                        info['blackwell_error'] = f"Error checking Blackwell support: {e}"
+                        # Fallback to legacy detection
+                        gpu_name = info['gpu_name']
+                        info['is_blackwell'] = "RTX 50" in gpu_name or "B" in gpu_name or major >= 12
+                        info['blackwell_support'] = self.device == 'cuda' if info['is_blackwell'] else None
                 else:
-                    info['is_blackwell'] = False
-                    info['blackwell_support'] = None
+                    # Legacy Blackwell detection
+                    gpu_name = info['gpu_name']
+                    info['is_blackwell'] = "RTX 50" in gpu_name or "B" in gpu_name or major >= 12
+                    info['blackwell_support'] = self.device == 'cuda' if info['is_blackwell'] else None
+                    if info['is_blackwell']:
+                        info['legacy_detection'] = True
                     
             except Exception as e:
                 info['gpu_error'] = str(e)

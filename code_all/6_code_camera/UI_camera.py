@@ -467,7 +467,87 @@ class CameraUI:
         
         return "\n".join(lines)
 
+    def get_gpu_status(self) -> str:
+        """
+        Get GPU status information for display in UI
+        
+        Returns:
+            Formatted string with GPU and Blackwell support status
+        """
+        if not BACKEND_AVAILABLE or self.analyzer is None:
+            return "❌ **Backend Status:** YOLO backend not available\n\n🔧 **Fix:** Install required packages:\n```\npip install torch torchvision ultralytics\n```"
+        
+        try:
+            device_info = self.analyzer.get_device_info()
+            
+            status_lines = []
+            
+            # Basic device info
+            device = device_info.get('device', 'unknown')
+            if device == 'cuda':
+                status_lines.append("✅ **GPU Acceleration:** Enabled")
+            else:
+                status_lines.append("⚠️ **GPU Acceleration:** Disabled (using CPU)")
+            
+            # PyTorch info
+            pytorch_version = device_info.get('pytorch_version', 'unknown')
+            status_lines.append(f"🐍 **PyTorch:** {pytorch_version}")
+            
+            # GPU details if available
+            if device_info.get('cuda_available', False):
+                gpu_name = device_info.get('gpu_name', 'Unknown GPU')
+                compute_cap = device_info.get('compute_capability', 'unknown')
+                memory = device_info.get('gpu_memory', 0)
+                
+                status_lines.append(f"🎮 **GPU:** {gpu_name}")
+                status_lines.append(f"📊 **Compute Capability:** {compute_cap}")
+                status_lines.append(f"💾 **GPU Memory:** {memory:.1f} GB")
+                
+                # Blackwell support status
+                is_blackwell = device_info.get('is_blackwell', False)
+                is_rtx_5000 = device_info.get('is_rtx_5000_series', False)
+                sm_count = device_info.get('sm_count', 0)
+                
+                if is_blackwell:
+                    status_lines.append("🚀 **Architecture:** Blackwell (RTX 5000 series)")
+                    if is_rtx_5000:
+                        status_lines.append(f"⚡ **Streaming Multiprocessors:** ~{sm_count} SMs")
+                        if device_info.get('optimization_notes'):
+                            status_lines.append(f"🎯 **Optimization:** {device_info['optimization_notes']}")
+                    
+                    blackwell_support = device_info.get('blackwell_support', False)
+                    support_message = device_info.get('support_message', '')
+                    
+                    if blackwell_support:
+                        status_lines.append("✅ **Blackwell Support:** Fully supported")
+                    else:
+                        status_lines.append("⚠️ **Blackwell Support:** Limited (using CPU fallback)")
+                        if support_message:
+                            status_lines.append(f"ℹ️ **Details:** {support_message}")
+                            
+                        # Add upgrade suggestion
+                        status_lines.append("\n🔧 **Recommendation:** Upgrade to PyTorch 2.7.0+cu128:")
+                        status_lines.append("```")
+                        status_lines.append("pip install torch==2.7.0 torchvision==0.22.0 --extra-index-url https://download.pytorch.org/whl/cu128")
+                        status_lines.append("```")
+                else:
+                    status_lines.append("🔧 **Architecture:** Non-Blackwell (Fully supported)")
+            
+            # Model info
+            model_initialized = device_info.get('model_initialized', False)
+            model_size = device_info.get('model_size', 'unknown')
+            
+            if model_initialized:
+                status_lines.append(f"✅ **YOLO Model:** {model_size} (Ready)")
+            else:
+                status_lines.append("⚠️ **YOLO Model:** Not initialized")
+            
+            return "\n".join(status_lines)
+            
+        except Exception as e:
+            return f"❌ **Error getting GPU status:** {str(e)}"
 
+    # ...existing code...
 def create_camera_tab() -> gr.Tab:
     """Create the Camera analysis tab interface"""
     
@@ -476,6 +556,22 @@ def create_camera_tab() -> gr.Tab:
     with gr.Tab("Camera") as camera_tab:
         gr.Markdown("# 📸 Camera Angle & Framing Analysis")
         gr.Markdown("Analyze images to determine camera framing and angles for Stable Diffusion prompts")
+        
+        # GPU Status Section
+        with gr.Accordion("🎮 GPU & System Status", open=False):
+            gpu_status_md = gr.Markdown(
+                value=ui.get_gpu_status(),
+                label="System Status"
+            )
+            refresh_status_btn = gr.Button(
+                "🔄 Refresh Status",
+                variant="secondary",
+                size="sm"
+            )
+            refresh_status_btn.click(
+                fn=ui.get_gpu_status,
+                outputs=gpu_status_md
+            )
         
         with gr.Tabs():
             # Single Image Analysis Tab
