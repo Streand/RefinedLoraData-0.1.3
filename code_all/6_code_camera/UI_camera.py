@@ -8,6 +8,9 @@ import os
 import sys
 from typing import Dict, Any, Optional, Tuple, List
 import json
+import shutil
+from pathlib import Path
+import time
 
 # Add the current directory to path to import backend
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -134,6 +137,231 @@ class CameraUI:
             
         except Exception as e:
             return f"Error in batch analysis: {str(e)}", ""
+
+    def process_batch_upload(self, files: List[Any]) -> Tuple[str, List[Dict]]:
+        """
+        Process uploaded batch of images for camera analysis
+        
+        Args:
+            files: List of uploaded files from Gradio
+            
+        Returns:
+            Tuple of (status_message, processed_results)
+        """
+        if not BACKEND_AVAILABLE:
+            return "❌ YOLO backend not available", []
+            
+        if not files or len(files) == 0:
+            return "📁 No images uploaded", []
+        
+        try:
+            processed_results = []
+            total_files = len(files)
+            successful_count = 0
+            failed_files = []
+            
+            for i, file in enumerate(files):
+                # Update progress
+                progress_msg = f"Processing {i+1} of {total_files} images..."
+                
+                try:
+                    # Analyze the image
+                    if self.analyzer is not None:
+                        result = self.analyzer.analyze_image(file.name)
+                    else:
+                        failed_files.append(f"{os.path.basename(file.name)} (backend not available)")
+                        continue
+                    
+                    if "error" in result and result.get("success", False) is False:
+                        failed_files.append(f"{os.path.basename(file.name)} ({result['error']})")
+                        continue
+                    
+                    # Store successful result with file info
+                    processed_results.append({
+                        'file_path': file.name,
+                        'file_name': os.path.basename(file.name),
+                        'analysis': result
+                    })
+                    successful_count += 1
+                    
+                except Exception as e:
+                    failed_files.append(f"{os.path.basename(file.name)} (processing error: {str(e)})")
+                    continue
+            
+            # Generate summary message
+            status_msg = f"✅ Batch processing complete!\n"
+            status_msg += f"📊 Successfully processed: {successful_count}/{total_files} images\n"
+            
+            if failed_files:
+                status_msg += f"❌ Failed images:\n"
+                for failed in failed_files[:5]:  # Show max 5 failed files
+                    status_msg += f"   • {failed}\n"
+                if len(failed_files) > 5:
+                    status_msg += f"   • ... and {len(failed_files) - 5} more\n"
+            
+            status_msg += f"\n💾 Ready to save {successful_count} analyzed images"
+            
+            return status_msg, processed_results
+            
+        except Exception as e:
+            return f"❌ Batch processing error: {str(e)}", []
+
+    def save_batch_results(self, processed_results: List[Dict], folder_name: str) -> Tuple[str, str]:
+        """
+        Save batch analysis results to data storage
+        
+        Args:
+            processed_results: List of processed image results
+            folder_name: Custom folder name for saving
+            
+        Returns:
+            Tuple of (status_message, output_folder_path)
+        """
+        if not processed_results:
+            return "❌ No processed results to save", ""
+            
+        if not folder_name or folder_name.strip() == "":
+            return "❌ Please enter a folder name", ""
+        
+        # Clean folder name (remove invalid characters)
+        clean_folder_name = "".join(c for c in folder_name.strip() if c.isalnum() or c in (' ', '-', '_')).strip()
+        if not clean_folder_name:
+            return "❌ Invalid folder name. Use only letters, numbers, spaces, hyphens, and underscores.", ""
+        
+        try:
+            # Create output directory - use absolute path to project root
+            current_file_dir = Path(__file__).parent  # 6_code_camera directory
+            project_root = current_file_dir.parent.parent  # Go up two levels to project root
+            base_dir = project_root / "data_storage" / "data_store_camera"
+            output_dir = base_dir / clean_folder_name
+            
+            # Check if directory already exists
+            if output_dir.exists():
+                timestamp = int(time.time())
+                output_dir = base_dir / f"{clean_folder_name}_{timestamp}"
+            
+            output_dir.mkdir(parents=True, exist_ok=True)
+            
+            saved_count = 0
+            failed_saves = []
+            
+            for i, result_data in enumerate(processed_results, 1):
+                try:
+                    file_path = result_data['file_path']
+                    original_name = result_data['file_name']
+                    analysis = result_data['analysis']
+                    
+                    # Get file extension
+                    file_ext = Path(original_name).suffix.lower()
+                    
+                    # Generate new filenames
+                    base_name = f"{clean_folder_name}-camera-{i}"
+                    image_name = f"{base_name}{file_ext}"
+                    txt_name = f"{base_name}.txt"
+                    full_txt_name = f"{base_name}full.txt"
+                    
+                    # Copy image file
+                    shutil.copy2(file_path, output_dir / image_name)
+                    
+                    # Generate SD prompt for txt file
+                    if self.analyzer is not None:
+                        sd_prompt = self.analyzer.get_stable_diffusion_prompt(analysis)
+                    else:
+                        sd_prompt = "Analysis not available"
+                    
+                    # Write simple txt file (SD prompt)
+                    with open(output_dir / txt_name, 'w', encoding='utf-8') as f:
+                        f.write(sd_prompt)
+                    
+                    # Write full analysis txt file
+                    with open(output_dir / full_txt_name, 'w', encoding='utf-8') as f:
+                        f.write("=== YOLO Camera Analysis Results ===\n\n")
+                        
+                        # Basic analysis
+                        f.write(f"Framing: {analysis.get('framing', 'unknown')}\n")
+                        f.write(f"Camera Angle: {analysis.get('camera_angle', 'unknown')}\n")
+                        f.write(f"People Detected: {analysis.get('people_detected', 0)}\n")
+                        f.write(f"Confidence: {analysis.get('confidence', 0.0):.3f}\n")
+                        f.write(f"Analysis Time: {analysis.get('inference_time', 0.0):.3f}s\n")
+                        f.write(f"Device: {analysis.get('device', 'unknown')}\n")
+                        
+                        # Pose analysis if available
+                        if 'pose_analysis' in analysis and analysis['pose_analysis']:
+                            pose = analysis['pose_analysis']
+                            f.write(f"\n=== Pose Analysis ===\n")
+                            f.write(f"Visible Keypoints: {pose.get('visible_keypoints', 0)}/17\n")
+                            f.write(f"Symmetry Score: {pose.get('symmetry_score', 0.0):.3f}\n")
+                            f.write(f"Face Visibility: {pose.get('face_visibility', 'unknown')}\n")
+                            f.write(f"Body Orientation: {pose.get('body_orientation', 'unknown')}\n")
+                        
+                        # Generated SD prompt
+                        f.write(f"\n=== Stable Diffusion Prompt ===\n")
+                        f.write(sd_prompt)
+                        
+                        # Raw analysis data (as JSON)
+                        f.write(f"\n\n=== Raw Analysis Data (JSON) ===\n")
+                        f.write(json.dumps(analysis, indent=2))
+                    
+                    saved_count += 1
+                    
+                except Exception as e:
+                    file_ref = result_data.get('file_name', f'image_{i}') if 'file_name' in result_data else f'image_{i}'
+                    failed_saves.append(f"{file_ref} ({str(e)})")
+                    continue
+            
+            # Generate success message
+            success_msg = f"✅ Successfully saved {saved_count} images and analysis files!\n\n"
+            success_msg += f"📁 Saved to: {output_dir.absolute()}\n\n"
+            success_msg += f"📋 Files created per image:\n"
+            success_msg += f"   • [name]-camera-[num].jpg/png - Original image\n"
+            success_msg += f"   • [name]-camera-[num].txt - SD prompt\n"
+            success_msg += f"   • [name]-camera-[num]full.txt - Complete analysis\n"
+            
+            if failed_saves:
+                success_msg += f"\n❌ Failed to save:\n"
+                for failed in failed_saves:
+                    success_msg += f"   • {failed}\n"
+            
+            return success_msg, str(output_dir.absolute())
+            
+        except Exception as e:
+            return f"❌ Save error: {str(e)}", ""
+
+    def open_saved_folder(self, folder_path: str) -> str:
+        """
+        Open the saved folder in Windows Explorer
+        
+        Args:
+            folder_path: Path to the folder to open
+            
+        Returns:
+            Status message
+        """
+        if not folder_path or not os.path.exists(folder_path):
+            return "❌ Folder path not found"
+        
+        try:
+            import subprocess
+            import platform
+            
+            # Convert to absolute path and normalize
+            abs_path = os.path.abspath(folder_path)
+            
+            system = platform.system()
+            if system == "Windows":
+                # Use Windows explorer - try both methods for reliability
+                subprocess.run(['explorer', '/select,', abs_path], check=False)
+                subprocess.run(['explorer', abs_path], check=False)
+                return f"✅ Opened folder in Windows Explorer: {abs_path}"
+            elif system == "Darwin":  # macOS
+                subprocess.run(['open', abs_path], check=True)
+                return f"✅ Opened folder in Finder: {abs_path}"
+            else:  # Linux
+                subprocess.run(['xdg-open', abs_path], check=True)
+                return f"✅ Opened folder: {abs_path}"
+                
+        except Exception as e:
+            return f"❌ Could not open folder: {str(e)}"
 
     def _format_analysis_result(self, result: Dict[str, Any]) -> str:
         """Format single image analysis result for YOLO backend"""
@@ -328,6 +556,106 @@ def create_camera_tab() -> gr.Tab:
                     inputs=[folder_input],
                     outputs=[batch_results, csv_output]
                 )
+
+            # Batch Upload & Save Tab
+            with gr.TabItem("Batch Upload & Save"):
+                with gr.Row():
+                    with gr.Column(scale=1):
+                        gr.Markdown("### 📤 Upload Images")
+                        
+                        batch_upload = gr.File(
+                            label="Select Multiple Images",
+                            file_count="multiple",
+                            file_types=["image"],
+                            height=200
+                        )
+                        
+                        upload_btn = gr.Button(
+                            "🔍 Analyze Uploaded Images",
+                            variant="primary",
+                            size="lg"
+                        )
+                        
+                        # Processing status
+                        processing_status = gr.Markdown(
+                            label="Processing Status",
+                            value="📁 Upload images above and click analyze"
+                        )
+                    
+                    with gr.Column(scale=1):
+                        gr.Markdown("### 💾 Save Results")
+                        
+                        folder_name_input = gr.Textbox(
+                            label="Folder Name",
+                            placeholder="e.g., person1, character_set_a, etc.",
+                            lines=1,
+                            info="Files will be saved as: [name]-camera-1.jpg, [name]-camera-1.txt, etc."
+                        )
+                        
+                        save_btn = gr.Button(
+                            "💾 Save Analysis Results",
+                            variant="secondary",
+                            size="lg",
+                            interactive=False
+                        )
+                        
+                        open_folder_btn = gr.Button(
+                            "📁 Open Saved Folder",
+                            variant="secondary",
+                            size="lg",
+                            interactive=False,
+                            visible=False
+                        )
+                        
+                        save_status = gr.Markdown(
+                            label="Save Status",
+                            value="🔄 Process images first, then save results"
+                        )
+                
+                # Hidden state to store processed results and folder path
+                processed_data = gr.State([])
+                saved_folder_path = gr.State("")
+                
+                # Wire up batch upload processing
+                def process_and_update_ui(files):
+                    status, results = ui.process_batch_upload(files)
+                    # Enable save button if we have results
+                    save_enabled = len(results) > 0
+                    return status, results, gr.update(interactive=save_enabled)
+                
+                upload_btn.click(
+                    fn=process_and_update_ui,
+                    inputs=[batch_upload],
+                    outputs=[processing_status, processed_data, save_btn]
+                )
+                
+                # Wire up save functionality
+                def save_and_update_ui(results, folder_name):
+                    save_msg, folder_path = ui.save_batch_results(results, folder_name)
+                    # Show open folder button if save was successful
+                    open_btn_visible = "✅ Successfully saved" in save_msg
+                    open_btn_interactive = bool(folder_path)
+                    return (save_msg, 
+                            gr.update(interactive=False), 
+                            folder_path,
+                            gr.update(visible=open_btn_visible, interactive=open_btn_interactive))
+                
+                save_btn.click(
+                    fn=save_and_update_ui,
+                    inputs=[processed_data, folder_name_input],
+                    outputs=[save_status, save_btn, saved_folder_path, open_folder_btn]
+                )
+                
+                # Wire up open folder functionality
+                def open_folder_and_update(folder_path):
+                    open_msg = ui.open_saved_folder(folder_path)
+                    return open_msg
+                
+                open_folder_btn.click(
+                    fn=open_folder_and_update,
+                    inputs=[saved_folder_path],
+                    outputs=[save_status]
+                )
             
             # Reference Guide Tab
             with gr.TabItem("Reference Guide"):
@@ -341,8 +669,10 @@ def create_camera_tab() -> gr.Tab:
             ## 💡 Tips for Best Results
             - **Single Analysis**: Upload clear images with visible subjects
             - **Batch Analysis**: Ensure folder contains only image files (.jpg, .png, etc.)
+            - **Batch Upload & Save**: Upload multiple images, analyze them, then save with custom naming
             - **Stable Diffusion**: Use the generated prompt components in your SD prompts
             - **Quality**: Higher resolution images generally provide more accurate analysis
+            - **File Organization**: Saved files will be organized in data_storage/data_store_camera/[your_folder_name]/
             """)
     
     return camera_tab
