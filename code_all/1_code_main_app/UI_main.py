@@ -551,8 +551,458 @@ def create_main_ui():
             
             # Clothing Tab
             with gr.TabItem("Clothing"):
-                gr.Markdown("## Clothing Analysis")
-                gr.Markdown("Clothing analysis functionality will be added here.")
+                gr.Markdown("# 👔 Clothing Analysis")
+                gr.Markdown("Analyze clothing and fashion in images for Stable Diffusion and LoRA training")
+                
+                try:
+                    # Try to import clothing analysis functionality
+                    import sys
+                    import os
+                    clothing_path = os.path.join(os.path.dirname(__file__), '..', '7_code_clothing')
+                    sys.path.append(clothing_path)
+                    
+                    # Import the clothing UI functions - prioritize full backend
+                    try:
+                        from backend_clothing import create_clothing_analyzer, ClothingAnalyzer as UltraSimpleClothingAnalyzer
+                        clothing_backend_available = True
+                        backend_type = "full"
+                        print("✓ Main UI using full clothing backend (InstructBLIP + BLIP-2)")
+                    except ImportError:
+                        try:
+                            from backend_clothing_simple import create_clothing_analyzer, SimpleClothingAnalyzer as UltraSimpleClothingAnalyzer
+                            clothing_backend_available = True
+                            backend_type = "simple"
+                            print("✓ Main UI using simple clothing backend")
+                        except ImportError:
+                            try:
+                                from backend_clothing_ultra_simple import create_clothing_analyzer, UltraSimpleClothingAnalyzer
+                                clothing_backend_available = True
+                                backend_type = "ultra_simple"
+                                print("⚠️ Main UI using ultra-simple clothing backend")
+                            except ImportError:
+                                clothing_backend_available = False
+                                backend_type = "none"
+                                print("❌ No clothing backend available")
+                    
+                    if clothing_backend_available:
+                        # Create embedded clothing analysis interface
+                        # GPU Status Section
+                        with gr.Accordion("🎮 GPU & System Status", open=False):
+                            def get_clothing_gpu_status():
+                                if not clothing_backend_available:
+                                    return "❌ **Backend Status:** Clothing analysis backend not available"
+                                
+                                try:
+                                    analyzer = create_clothing_analyzer()
+                                    if hasattr(analyzer, 'get_device_info'):
+                                        device_info = analyzer.get_device_info()
+                                        status_lines = []
+                                        
+                                        device = device_info.get('device', 'unknown')
+                                        if device == 'cuda':
+                                            status_lines.append("✅ **GPU Acceleration:** Enabled")
+                                        else:
+                                            status_lines.append("⚠️ **GPU Acceleration:** Disabled (using CPU)")
+                                        
+                                        model_name = device_info.get('model_name', 'unknown')
+                                        model_initialized = device_info.get('model_initialized', False)
+                                        status_lines.append(f"🤖 **Model:** {model_name.upper()} ({'Ready' if model_initialized else 'Not initialized'})")
+                                        status_lines.append(f"🔧 **Backend Type:** {backend_type.upper()}")
+                                        
+                                        return "\n".join(status_lines)
+                                    else:
+                                        return f"✅ **Backend Available:** {backend_type.upper()}"
+                                except Exception as e:
+                                    return f"⚠️ **Status Check Error:** {str(e)}"
+                            
+                            gpu_status_md = gr.Markdown(
+                                value=get_clothing_gpu_status(),
+                                label="System Status"
+                            )
+                            refresh_status_btn = gr.Button(
+                                "🔄 Refresh Status",
+                                variant="secondary",
+                                size="sm"
+                            )
+                            refresh_status_btn.click(
+                                fn=get_clothing_gpu_status,
+                                outputs=gpu_status_md
+                            )
+                        
+                        # Model Selection (simplified for main app)
+                        with gr.Row():
+                            if backend_type == "full":
+                                model_choice = gr.Radio(
+                                    choices=["InstructBLIP"],
+                                    value="InstructBLIP",
+                                    label="🤖 Analysis Model",
+                                    info="Using full backend with InstructBLIP for detailed analysis"
+                                )
+                            else:
+                                model_choice = gr.Radio(
+                                    choices=["BLIP"],
+                                    value="BLIP",
+                                    label="🤖 Analysis Model",
+                                    info=f"Using {backend_type.replace('_', ' ').title()} backend"
+                                )
+                        
+                        with gr.Tabs():
+                            # Single Image Analysis Tab
+                            with gr.TabItem("Single Image"):
+                                with gr.Row():
+                                    with gr.Column():
+                                        clothing_image_input = gr.Image(
+                                            label="Upload Image for Clothing Analysis",
+                                            type="pil",
+                                            height=400
+                                        )
+                                        clothing_analyze_btn = gr.Button(
+                                            "👔 Analyze Clothing",
+                                            variant="primary",
+                                            size="lg"
+                                        )
+                                    
+                                    with gr.Column():
+                                        clothing_analysis_output = gr.Markdown(
+                                            label="Clothing Analysis",
+                                            value="Upload an image and click analyze to see clothing details"
+                                        )
+                                        
+                                        clothing_categorized_output = gr.Markdown(
+                                            label="Categorized Items",
+                                            value=""
+                                        )
+                                        
+                                        with gr.Row():
+                                            clothing_confidence_output = gr.Markdown(
+                                                label="Confidence",
+                                                value=""
+                                            )
+                                            clothing_model_info_output = gr.Markdown(
+                                                label="Model Used",
+                                                value=""
+                                            )
+                                        
+                                        clothing_sd_prompt_output = gr.Textbox(
+                                            label="🎨 Stable Diffusion Prompt",
+                                            placeholder="Generated SD prompt will appear here",
+                                            lines=3,
+                                            interactive=True
+                                        )
+                                
+                                # Analysis function
+                                def analyze_clothing_single(image, model_choice):
+                                    if not clothing_backend_available:
+                                        return (
+                                            "❌ Clothing analysis backend not available",
+                                            "Please check the 7_code_clothing folder",
+                                            "",
+                                            "",
+                                            ""
+                                        )
+                                    
+                                    if image is None:
+                                        return "No image uploaded", "", "", "", ""
+                                    
+                                    try:
+                                        # Determine model name based on backend type and choice
+                                        if backend_type == "full":
+                                            # Use InstructBLIP for full backend
+                                            model_name = "instructblip"
+                                            analyzer = create_clothing_analyzer("instructblip")
+                                        else:
+                                            # Use default for simple backends
+                                            analyzer = create_clothing_analyzer()
+                                        
+                                        # Save temporary image for analysis
+                                        import time
+                                        temp_path = f"temp_clothing_analysis_{int(time.time())}.jpg"
+                                        image.save(temp_path)
+                                        
+                                        # Analyze the image
+                                        result = analyzer.analyze_image(temp_path)
+                                        
+                                        # Clean up temp file
+                                        if os.path.exists(temp_path):
+                                            os.remove(temp_path)
+                                        
+                                        if "error" in result:
+                                            return f"❌ Error: {result['error']}", "", "", "", ""
+                                        
+                                        # Format results
+                                        raw_desc = result.get('raw_description', '')
+                                        analysis_text = f"## 👔 Clothing Analysis Results\n\n**Description:** {raw_desc}"
+                                        
+                                        categorized = result.get('categorized', {})
+                                        categorized_info = "## 📋 Categories\n\n"
+                                        for category, items in categorized.items():
+                                            if items:
+                                                categorized_info += f"**{category.replace('_', ' ').title()}:** {', '.join(items)}\n\n"
+                                        
+                                        sd_prompt = result.get("sd_prompt", "")
+                                        confidence_info = f"Confidence: {result.get('confidence', 0):.1%}"
+                                        model_info = f"Model: {result.get('model_used', backend_type).upper()}"
+                                        
+                                        return analysis_text, categorized_info, sd_prompt, confidence_info, model_info
+                                        
+                                    except Exception as e:
+                                        return f"❌ Error analyzing image: {str(e)}", "", "", "", ""
+                                
+                                # Wire up the analysis
+                                clothing_analyze_btn.click(
+                                    fn=analyze_clothing_single,
+                                    inputs=[clothing_image_input, model_choice],
+                                    outputs=[
+                                        clothing_analysis_output, 
+                                        clothing_categorized_output, 
+                                        clothing_sd_prompt_output, 
+                                        clothing_confidence_output, 
+                                        clothing_model_info_output
+                                    ]
+                                )
+                            
+                            # Batch Analysis Tab
+                            with gr.TabItem("Batch Analysis"):
+                                with gr.Row():
+                                    with gr.Column():
+                                        clothing_batch_files = gr.File(
+                                            label="📁 Upload Multiple Images",
+                                            file_count="multiple",
+                                            file_types=["image"]
+                                        )
+                                        
+                                        clothing_batch_analyze_btn = gr.Button(
+                                            "👔 Analyze Batch",
+                                            variant="primary",
+                                            size="lg"
+                                        )
+                                        
+                                        clothing_batch_status = gr.Markdown(
+                                            label="Batch Status",
+                                            value="Upload images and click 'Analyze Batch' to start"
+                                        )
+                                    
+                                    with gr.Column():
+                                        gr.Markdown("### 💾 Save Results")
+                                        
+                                        clothing_folder_name_input = gr.Textbox(
+                                            label="📂 Folder Name",
+                                            placeholder="Enter folder name for saving results",
+                                            value=""
+                                        )
+                                        
+                                        with gr.Row():
+                                            clothing_save_batch_btn = gr.Button(
+                                                "💾 Save Batch Results",
+                                                variant="secondary",
+                                                size="lg"
+                                            )
+                                            
+                                            clothing_open_folder_btn = gr.Button(
+                                                "📂 Open Saved Folder",
+                                                variant="secondary",
+                                                size="lg"
+                                            )
+                                        
+                                        clothing_save_status = gr.Markdown(
+                                            label="Save Status",
+                                            value=""
+                                        )
+                                
+                                # Batch analysis functions
+                                def analyze_clothing_batch(files, model_choice):
+                                    if not clothing_backend_available:
+                                        return "❌ Clothing analysis backend not available", []
+                                    
+                                    if not files:
+                                        return "No files uploaded", []
+                                    
+                                    try:
+                                        # Determine model name based on backend type
+                                        if backend_type == "full":
+                                            analyzer = create_clothing_analyzer("instructblip")
+                                        else:
+                                            analyzer = create_clothing_analyzer()
+                                        
+                                        results = []
+                                        successful_count = 0
+                                        failed_files = []
+                                        
+                                        for file in files:
+                                            try:
+                                                result = analyzer.analyze_image(file.name)
+                                                
+                                                if "error" in result:
+                                                    failed_files.append(f"{os.path.basename(file.name)} (Error: {result['error']})")
+                                                    continue
+                                                
+                                                filename = os.path.basename(file.name)
+                                                results.append({
+                                                    'filename': filename,
+                                                    'original_path': file.name,
+                                                    'analysis': result
+                                                })
+                                                
+                                                successful_count += 1
+                                                
+                                            except Exception as e:
+                                                failed_files.append(f"{os.path.basename(file.name)} (Error: {str(e)})")
+                                        
+                                        status_msg = f"✅ Analyzed {successful_count} images successfully"
+                                        if failed_files:
+                                            status_msg += f"\n❌ Failed: {len(failed_files)} files"
+                                            status_msg += "\n" + "\n".join(failed_files[:3])
+                                        
+                                        if successful_count > 0:
+                                            status_msg += f"\n💾 Ready to save {successful_count} analyzed images"
+                                        
+                                        return status_msg, results
+                                        
+                                    except Exception as e:
+                                        return f"❌ Batch analysis error: {str(e)}", []
+                                
+                                def save_clothing_batch_results(results, folder_name):
+                                    if not results:
+                                        return "No results to save", ""
+                                    
+                                    if not folder_name.strip():
+                                        import time
+                                        folder_name = f"clothing_batch_{int(time.time())}"
+                                    
+                                    try:
+                                        base_dir = os.path.join("..", "..", "data_storage", "data_store_clothing")
+                                        save_dir = os.path.join(base_dir, folder_name)
+                                        save_dir = os.path.abspath(save_dir)
+                                        
+                                        if os.path.exists(save_dir):
+                                            return f"❌ Folder '{folder_name}' already exists", ""
+                                        
+                                        os.makedirs(save_dir, exist_ok=True)
+                                        saved_count = 0
+                                        
+                                        for result in results:
+                                            try:
+                                                filename = result['filename']
+                                                analysis = result['analysis']
+                                                original_path = result['original_path']
+                                                
+                                                base_name = os.path.splitext(filename)[0]
+                                                
+                                                # Copy image
+                                                import shutil
+                                                image_save_path = os.path.join(save_dir, f"{base_name}_clothing.jpg")
+                                                shutil.copy2(original_path, image_save_path)
+                                                
+                                                # Save SD prompt
+                                                txt_save_path = os.path.join(save_dir, f"{base_name}_clothing.txt")
+                                                with open(txt_save_path, 'w', encoding='utf-8') as f:
+                                                    f.write(analysis.get('sd_prompt', ''))
+                                                
+                                                # Save full analysis
+                                                import json
+                                                import time
+                                                full_save_path = os.path.join(save_dir, f"{base_name}_clothingfull.txt")
+                                                with open(full_save_path, 'w', encoding='utf-8') as f:
+                                                    full_data = {
+                                                        'filename': filename,
+                                                        'model_used': analysis.get('model_used', backend_type),
+                                                        'raw_description': analysis.get('raw_description', ''),
+                                                        'categorized': analysis.get('categorized', {}),
+                                                        'confidence': analysis.get('confidence', 0),
+                                                        'sd_prompt': analysis.get('sd_prompt', ''),
+                                                        'timestamp': time.time()
+                                                    }
+                                                    json.dump(full_data, f, indent=2, ensure_ascii=False)
+                                                
+                                                saved_count += 1
+                                                
+                                            except Exception as e:
+                                                print(f"Error saving result: {e}")
+                                                continue
+                                        
+                                        status_msg = f"✅ Saved {saved_count} clothing analyses to '{folder_name}'"
+                                        return status_msg, save_dir
+                                        
+                                    except Exception as e:
+                                        return f"❌ Error saving results: {str(e)}", ""
+                                
+                                def open_clothing_saved_folder(folder_path):
+                                    if not folder_path or not os.path.exists(folder_path):
+                                        return "❌ No valid folder path to open"
+                                    
+                                    try:
+                                        import subprocess
+                                        subprocess.Popen(f'explorer "{folder_path}"')
+                                        return f"✅ Opened folder: {os.path.basename(folder_path)}"
+                                    except Exception as e:
+                                        return f"❌ Could not open folder: {str(e)}"
+                                
+                                # Hidden state for batch results
+                                clothing_batch_results_state = gr.State([])
+                                clothing_saved_folder_path_state = gr.State("")
+                                
+                                # Wire up batch functionality
+                                clothing_batch_analyze_btn.click(
+                                    fn=analyze_clothing_batch,
+                                    inputs=[clothing_batch_files, model_choice],
+                                    outputs=[clothing_batch_status, clothing_batch_results_state]
+                                )
+                                
+                                clothing_save_batch_btn.click(
+                                    fn=save_clothing_batch_results,
+                                    inputs=[clothing_batch_results_state, clothing_folder_name_input],
+                                    outputs=[clothing_save_status, clothing_saved_folder_path_state]
+                                )
+                                
+                                clothing_open_folder_btn.click(
+                                    fn=open_clothing_saved_folder,
+                                    inputs=[clothing_saved_folder_path_state],
+                                    outputs=[clothing_save_status]
+                                )
+                        
+                        # Clothing Categories Reference
+                        with gr.Accordion("📋 Clothing Categories Reference", open=False):
+                            clothing_categories = {
+                                "Upper Body": ["shirt", "t-shirt", "blouse", "sweater", "hoodie", "jacket", "blazer", "coat"],
+                                "Lower Body": ["pants", "jeans", "trousers", "shorts", "skirt", "dress", "leggings"],
+                                "Footwear": ["shoes", "sneakers", "boots", "sandals", "heels", "flats", "loafers"],
+                                "Accessories": ["hat", "scarf", "belt", "bag", "jewelry", "watch", "glasses"],
+                                "Styles": ["casual", "formal", "business", "streetwear", "vintage", "athletic"]
+                            }
+                            
+                            ref_text = []
+                            for category, items in clothing_categories.items():
+                                ref_text.append(f"**{category}:** {', '.join(items)}")
+                            
+                            gr.Markdown("\n\n".join(ref_text))
+                    
+                    else:
+                        # Fallback when backend is not available
+                        gr.Markdown("### ⚠️ Clothing Analysis Backend Not Available")
+                        gr.Markdown("""
+                        The clothing analysis functionality requires the backend modules to be properly installed.
+                        
+                        **To enable clothing analysis:**
+                        1. Navigate to the `7_code_clothing` folder
+                        2. Install dependencies: `pip install -r requirements_clothing.txt`
+                        3. Test the backend: `python backend_clothing_ultra_simple.py`
+                        4. Restart the main application
+                        
+                        **Alternative:** Use the standalone clothing analysis by running `launch_clothing.bat` in the `7_code_clothing` folder.
+                        """)
+                
+                except Exception as e:
+                    # Error fallback
+                    gr.Markdown("### ❌ Error Loading Clothing Analysis")
+                    gr.Markdown(f"**Error Details:** {str(e)}")
+                    gr.Markdown("""
+                    **Troubleshooting:**
+                    1. Check that the `7_code_clothing` folder exists
+                    2. Install dependencies: `pip install -r 7_code_clothing/requirements_clothing.txt`
+                    3. Test standalone: `python 7_code_clothing/launch_clothing.py`
+                    
+                    **Quick Fix:** Use the standalone version in the `7_code_clothing` folder.
+                    """)
             
             # NSFW Tab
             with gr.TabItem("NSFW"):
