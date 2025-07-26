@@ -562,23 +562,57 @@ def create_main_ui():
                     sys.path.append(clothing_path)
                     
                     # Import the clothing UI functions - prioritize full backend
+                    global clothing_analyzer_cache
+                    clothing_analyzer_cache = None
+                    
+                    def get_clothing_analyzer():
+                        """Lazy loading function for clothing analyzer"""
+                        global clothing_analyzer_cache
+                        if clothing_analyzer_cache is None:
+                            print("🔄 Loading clothing analysis model (this may take a moment)...")
+                            try:
+                                from backend_clothing import create_clothing_analyzer
+                                print("📦 Loading InstructBLIP model...")
+                                clothing_analyzer_cache = create_clothing_analyzer()
+                                print("✅ InstructBLIP model loaded successfully!")
+                                return clothing_analyzer_cache
+                            except ImportError:
+                                try:
+                                    from backend_clothing_simple import create_clothing_analyzer
+                                    print("📦 Loading simple clothing model...")
+                                    clothing_analyzer_cache = create_clothing_analyzer()
+                                    print("✅ Simple clothing model loaded successfully!")
+                                    return clothing_analyzer_cache
+                                except ImportError:
+                                    try:
+                                        from backend_clothing_ultra_simple import create_clothing_analyzer
+                                        print("📦 Loading ultra-simple clothing model...")
+                                        clothing_analyzer_cache = create_clothing_analyzer()
+                                        print("✅ Ultra-simple clothing model loaded successfully!")
+                                        return clothing_analyzer_cache
+                                    except ImportError:
+                                        print("❌ No clothing models available")
+                                        return None
+                        return clothing_analyzer_cache
+                    
                     try:
-                        from backend_clothing import create_clothing_analyzer, ClothingAnalyzer as UltraSimpleClothingAnalyzer
+                        # Just test if the import is available, don't create the analyzer yet
+                        from backend_clothing import create_clothing_analyzer
                         clothing_backend_available = True
                         backend_type = "full"
-                        print("✓ Main UI using full clothing backend (InstructBLIP + BLIP-2)")
+                        print("✓ Main UI: Full clothing backend available (will load on demand)")
                     except ImportError:
                         try:
-                            from backend_clothing_simple import create_clothing_analyzer, SimpleClothingAnalyzer as UltraSimpleClothingAnalyzer
+                            from backend_clothing_simple import create_clothing_analyzer
                             clothing_backend_available = True
                             backend_type = "simple"
-                            print("✓ Main UI using simple clothing backend")
+                            print("✓ Main UI: Simple clothing backend available (will load on demand)")
                         except ImportError:
                             try:
-                                from backend_clothing_ultra_simple import create_clothing_analyzer, UltraSimpleClothingAnalyzer
+                                from backend_clothing_ultra_simple import create_clothing_analyzer
                                 clothing_backend_available = True
                                 backend_type = "ultra_simple"
-                                print("⚠️ Main UI using ultra-simple clothing backend")
+                                print("✓ Main UI: Ultra-simple clothing backend available (will load on demand)")
                             except ImportError:
                                 clothing_backend_available = False
                                 backend_type = "none"
@@ -593,7 +627,9 @@ def create_main_ui():
                                     return "❌ **Backend Status:** Clothing analysis backend not available"
                                 
                                 try:
-                                    analyzer = create_clothing_analyzer()
+                                    analyzer = get_clothing_analyzer()
+                                    if analyzer is None:
+                                        return "❌ **Backend Status:** Failed to load clothing analyzer"
                                     if hasattr(analyzer, 'get_device_info'):
                                         device_info = analyzer.get_device_info()
                                         status_lines = []
@@ -705,14 +741,10 @@ def create_main_ui():
                                         return "No image uploaded", "", "", "", ""
                                     
                                     try:
-                                        # Determine model name based on backend type and choice
-                                        if backend_type == "full":
-                                            # Use InstructBLIP for full backend
-                                            model_name = "instructblip"
-                                            analyzer = create_clothing_analyzer("instructblip")
-                                        else:
-                                            # Use default for simple backends
-                                            analyzer = create_clothing_analyzer()
+                                        # Use lazy loading for clothing analyzer
+                                        analyzer = get_clothing_analyzer()
+                                        if analyzer is None:
+                                            return "❌ **Analysis Failed:** Could not load clothing analyzer", "", "❌ Failed to load model"
                                         
                                         # Save temporary image for analysis
                                         import time
@@ -818,11 +850,10 @@ def create_main_ui():
                                         return "No files uploaded", []
                                     
                                     try:
-                                        # Determine model name based on backend type
-                                        if backend_type == "full":
-                                            analyzer = create_clothing_analyzer("instructblip")
-                                        else:
-                                            analyzer = create_clothing_analyzer()
+                                        # Use lazy loading for clothing analyzer
+                                        analyzer = get_clothing_analyzer()
+                                        if analyzer is None:
+                                            return "❌ **Analysis Failed:** Could not load clothing analyzer", []
                                         
                                         results = []
                                         successful_count = 0

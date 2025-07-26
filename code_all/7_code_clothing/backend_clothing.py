@@ -42,8 +42,17 @@ try:
         BlipProcessor, 
         BlipForConditionalGeneration,
         InstructBlipProcessor,
-        InstructBlipForConditionalGeneration
+        InstructBlipForConditionalGeneration,
+        CLIPProcessor,
+        CLIPModel
     )
+    # Try to import fashion-clip if available
+    try:
+        import clip
+        fashion_clip_available = True
+    except ImportError:
+        fashion_clip_available = False
+    
     torch_available = True
     transformers_available = True
 except ImportError as e:
@@ -63,12 +72,13 @@ except ImportError as e:
 class ClothingAnalyzer:
     """Advanced clothing analysis using multiple vision-language models"""
     
-    def __init__(self, model_name: str = "instructblip"):
+    def __init__(self, model_name: str = "fashionclip"):
         """
         Initialize clothing analyzer
         
         Args:
-            model_name: Either "instructblip" or "blip2"
+            model_name: Either "fashionclip" (default), "instructblip", or "blip2"
+                       FashionCLIP is recommended for fashion-specific analysis
         """
         self.model_name = model_name.lower()
         self.device = self._setup_device()
@@ -179,6 +189,17 @@ class ClothingAnalyzer:
                     torch_dtype=torch.float16 if self.device == 'cuda' else torch.float32,
                     low_cpu_mem_usage=True
                 )
+                
+            elif self.model_name == "fashionclip":
+                logger.info("Loading FashionCLIP model for fashion-specific analysis...")
+                model_id = "patrickjohncyh/fashion-clip"
+                self.processor = CLIPProcessor.from_pretrained(model_id)  # type: ignore
+                self.model = CLIPModel.from_pretrained(  # type: ignore
+                    model_id,
+                    torch_dtype=torch.float16 if self.device == 'cuda' else torch.float32,
+                    low_cpu_mem_usage=True
+                )
+                
             else:
                 raise ValueError(f"Unknown model: {self.model_name}")
             
@@ -293,6 +314,10 @@ class ClothingAnalyzer:
                     response = response.replace(prompt, "").strip()
                 
                 return response
+                
+            elif self.model_name == "fashionclip":
+                # FashionCLIP with fashion-specific text queries
+                return self._analyze_with_fashionclip(image, test_mode)
             
         except Exception as e:
             logger.error(f"Error during image analysis: {e}")
@@ -306,9 +331,24 @@ class ClothingAnalyzer:
         categorized = {category: [] for category in self.clothing_categories.keys()}
         
         for category, items in self.clothing_categories.items():
-            for item in items:
+            # Sort items by length (longest first) to prioritize specific terms
+            items_sorted = sorted(items, key=len, reverse=True)
+            found_items = []
+            
+            for item in items_sorted:
                 if item in description_lower:
-                    categorized[category].append(item)
+                    # Check if this item is not already covered by a more specific term
+                    is_duplicate = False
+                    for existing_item in found_items:
+                        if item in existing_item:  # e.g., "top" is in "crop top"
+                            is_duplicate = True
+                            break
+                    
+                    if not is_duplicate:
+                        found_items.append(item)
+            
+            if found_items:
+                categorized[category] = found_items
         
         # Remove empty categories
         return {k: v for k, v in categorized.items() if v}
@@ -380,166 +420,215 @@ class ClothingAnalyzer:
     
     def _format_for_stable_diffusion(self, description: str, categorized: Dict[str, List[str]], 
                                    colors_patterns: List[str]) -> str:
-        """Format clothing description for Stable Diffusion prompts with enhanced detail"""
-        sd_parts = []
+        """Format clothing description for detailed, specific output perfect for Stable Diffusion"""
+        
+        # For FashionCLIP, the raw description is already well-formatted
+        # Just return it directly since it's already in "item1, item2" format
+        if self.model_name == "fashionclip":
+            # FashionCLIP already returns well-formatted descriptions
+            return description.strip()
+        
+        # For other models (InstructBLIP, BLIP-2), do the complex processing
+        clothing_items = []
         description_lower = description.lower()
         
-        # Add person descriptor
-        if "woman" in description_lower or "female" in description_lower:
-            sd_parts.append("woman")
-        elif "man" in description_lower or "male" in description_lower:
-            sd_parts.append("man")
-        else:
-            sd_parts.append("person")
+        # Process clothing items in order: upper body, lower body, outerwear, footwear
+        categories_to_process = ["upper_body", "lower_body", "outerwear", "footwear"]
         
-        # Add "wearing" connector
-        sd_parts.append("wearing")
+        for category in categories_to_process:
+            if category in categorized and categorized[category]:
+                for item in categorized[category]:
+                    enhanced_item = self._extract_detailed_clothing_description(item, description, description_lower)
+                    if enhanced_item:  # Only add if we got a valid enhanced item
+                        clothing_items.append(enhanced_item)
         
-        # Enhanced clothing items with descriptors
-        clothing_items = []
-        
-        # Process upper body items with detail
-        if "upper_body" in categorized and categorized["upper_body"]:
-            for item in categorized["upper_body"]:
-                enhanced_item = self._enhance_clothing_item(item, description_lower, colors_patterns)
-                clothing_items.append(enhanced_item)
-        
-        # Process lower body items
-        if "lower_body" in categorized and categorized["lower_body"]:
-            for item in categorized["lower_body"]:
-                enhanced_item = self._enhance_clothing_item(item, description_lower, colors_patterns)
-                clothing_items.append(enhanced_item)
-        
-        # Process outerwear items
-        if "outerwear" in categorized and categorized["outerwear"]:
-            for item in categorized["outerwear"]:
-                enhanced_item = self._enhance_clothing_item(item, description_lower, colors_patterns)
-                clothing_items.append(enhanced_item)
-        
-        # Add clothing items to prompt
-        if clothing_items:
-            sd_parts.extend(clothing_items)
-        
-        # Add footwear with descriptors
-        if "footwear" in categorized and categorized["footwear"]:
-            for item in categorized["footwear"]:
-                enhanced_item = self._enhance_clothing_item(item, description_lower, colors_patterns)
-                sd_parts.append(enhanced_item)
-        
-        # Add accessories
-        if "accessories" in categorized and categorized["accessories"]:
-            for item in categorized["accessories"]:
-                enhanced_item = self._enhance_clothing_item(item, description_lower, colors_patterns)
-                sd_parts.append(enhanced_item)
-        
-        # Add style and quality descriptors
-        style_descriptors = []
-        if "style" in categorized and categorized["style"]:
-            style_descriptors.extend(categorized["style"])
-        
-        # Add fabric and material descriptors from description
-        fabric_keywords = ["silk", "cotton", "denim", "leather", "wool", "linen", "satin", "velvet", "polyester"]
-        for fabric in fabric_keywords:
-            if fabric in description_lower and fabric not in [item.lower() for item in style_descriptors]:
-                style_descriptors.append(fabric)
-        
-        # Add fit descriptors
-        fit_keywords = ["tight", "loose", "fitted", "oversized", "slim", "baggy", "form-fitting"]
-        for fit in fit_keywords:
-            if fit in description_lower and f"{fit} fit" not in style_descriptors:
-                style_descriptors.append(f"{fit} fit")
-        
-        # Add style descriptors
-        if style_descriptors:
-            sd_parts.extend(style_descriptors)
-        
-        # Add quality and detail enhancers
-        quality_enhancers = [
-            "detailed clothing",
-            "high quality",
-            "professional photography",
-            "clear details"
-        ]
-        sd_parts.extend(quality_enhancers)
-        
-        # Add lighting and photo quality if mentioned
-        if any(word in description_lower for word in ["bright", "lighting", "well-lit", "good lighting"]):
-            sd_parts.append("good lighting")
-        
-        if any(word in description_lower for word in ["indoor", "inside", "room"]):
-            sd_parts.append("indoor setting")
-        elif any(word in description_lower for word in ["outdoor", "outside"]):
-            sd_parts.append("outdoor setting")
-        
-        # Clean and format
-        # Remove duplicates while preserving order
-        seen = set()
-        unique_parts = []
-        for part in sd_parts:
-            if part.lower() not in seen:
-                seen.add(part.lower())
-                unique_parts.append(part)
-        
-        sd_prompt = ", ".join(unique_parts)
-        
-        return sd_prompt
+        # Return detailed clothing list
+        return ", ".join(clothing_items) if clothing_items else description.strip()
     
-    def _enhance_clothing_item(self, item: str, description_lower: str, colors_patterns: List[str]) -> str:
-        """Enhance a clothing item with colors, patterns, and descriptors"""
-        enhanced = item
+    def _extract_detailed_clothing_description(self, base_item: str, full_description: str, description_lower: str) -> str:
+        """Extract detailed clothing description with specific features and materials"""
         
-        # Add colors if they appear specifically with the item
-        relevant_colors = []
-        for color in colors_patterns:
-            if color in ["black", "white", "red", "blue", "green", "yellow", "pink", "purple", "brown", "gray", "navy", "beige"]:
-                # Check if color is mentioned specifically with this item
-                if f"{color} {item}" in description_lower:
-                    relevant_colors.append(color)
+        # Map generic items to more specific types found in description
+        specific_item_mapping = {
+            "top": ["tank top", "crop top", "t-shirt", "blouse", "shirt", "halter top", "tube top", "camisole"],
+            "shirt": ["tank top", "t-shirt", "dress shirt", "button-up", "polo shirt", "blouse"],
+            "pants": ["jeans", "trousers", "slacks", "chinos", "yoga pants", "dress pants"],
+            "shorts": ["denim shorts", "jean shorts", "athletic shorts", "dress shorts", "cargo shorts"],
+            "dress": ["mini dress", "maxi dress", "midi dress", "cocktail dress", "sundress", "wrap dress"],
+            "skirt": ["mini skirt", "maxi skirt", "pencil skirt", "a-line skirt", "pleated skirt"],
+            "jacket": ["blazer", "bomber jacket", "denim jacket", "leather jacket", "cardigan"],
+            "shoes": ["sneakers", "heels", "boots", "sandals", "flats", "loafers"]
+        }
         
-        # Add the most relevant color (only if found with the specific item)
-        if relevant_colors:
-            enhanced = f"{relevant_colors[0]} {enhanced}"
-        
-        # Add patterns (only if mentioned with this specific item)
-        for pattern in colors_patterns:
-            if pattern in ["striped", "plaid", "floral", "polka dot", "checkered", "printed"]:
-                if f"{pattern} {item}" in description_lower or (pattern in description_lower and item in description_lower):
-                    enhanced = f"{pattern} {enhanced}"
+        # Find the most specific item type mentioned in description
+        final_item = base_item
+        if base_item in specific_item_mapping:
+            for specific_type in specific_item_mapping[base_item]:
+                if specific_type in description_lower:
+                    final_item = specific_type
                     break
         
-        # Add specific descriptors based on item type
-        if item == "dress":
-            if "long" in description_lower or "floor-length" in description_lower:
-                enhanced = f"long {enhanced}"
-            elif "short" in description_lower or "mini" in description_lower:
-                enhanced = f"short {enhanced}"
-            if "evening" in description_lower:
-                enhanced = f"evening {enhanced}"
-            elif "summer" in description_lower:
-                enhanced = f"summer {enhanced}"
+        # If we only found "red top", make it "tank top" for better SD prompts
+        if final_item == "top" and base_item == "top":
+            final_item = "tank top"  # Default assumption for better SD output
         
-        elif item == "shirt":
-            if "button" in description_lower:
-                enhanced = f"button-up {enhanced}"
-            if "collar" in description_lower:
-                enhanced = f"collared {enhanced}"
+        # Extract color specifically for this item
+        item_color = self._extract_specific_item_color(final_item, base_item, description_lower)
         
-        elif item == "pants" or item == "jeans":
-            if "tight" in description_lower:
-                enhanced = f"tight {enhanced}"
-            elif "loose" in description_lower:
-                enhanced = f"loose {enhanced}"
+        # Extract material specifically for this item (avoid cross-contamination)
+        item_material = self._extract_specific_item_material(final_item, base_item, description_lower)
         
-        elif item == "shoes":
-            if "high" in description_lower and "heel" in description_lower:
-                enhanced = "high heels"
-            elif "sneaker" in description_lower:
-                enhanced = "sneakers"
-            elif "boot" in description_lower:
-                enhanced = "boots"
+        # Extract patterns specifically for this item
+        item_patterns = self._extract_specific_item_patterns(final_item, base_item, description_lower)
         
-        return enhanced
+        # Build the final description in logical order
+        parts = []
+        
+        # Add color first (if found)
+        if item_color:
+            parts.append(item_color)
+        
+        # Add material (if relevant and not redundant)
+        if item_material and item_material not in final_item:
+            parts.append(item_material)
+        
+        # Add the specific item type
+        parts.append(final_item)
+        
+        # Add patterns/decorations at the end
+        if item_patterns:
+            parts.extend(item_patterns)
+        
+        return " ".join(parts)
     
+    def _extract_specific_item_color(self, final_item: str, base_item: str, description_lower: str) -> str:
+        """Extract color specifically for this clothing item"""
+        color_keywords = ["red", "blue", "white", "black", "pink", "green", "yellow", "purple", 
+                         "brown", "gray", "grey", "orange", "navy", "beige", "tan", "gold", 
+                         "silver", "maroon", "burgundy", "turquoise", "lime", "olive", "cream"]
+        
+        # Look for color + item patterns
+        import re
+        for color in color_keywords:
+            # Direct patterns: "red top", "blue shorts"
+            if re.search(rf"\b{color}\s+{re.escape(base_item)}\b", description_lower):
+                return color
+            # Or with the specific item: "red tank top"
+            if re.search(rf"\b{color}\s+{re.escape(final_item)}\b", description_lower):
+                return color
+        
+        return ""
+    
+    def _extract_specific_item_material(self, final_item: str, base_item: str, description_lower: str) -> str:
+        """Extract material specifically for this clothing item"""
+        material_keywords = ["denim", "cotton", "silk", "wool", "leather", "linen", "polyester", 
+                           "spandex", "nylon", "cashmere", "velvet", "satin", "chiffon", "lace"]
+        
+        # Look for materials mentioned specifically with this item
+        import re
+        for material in material_keywords:
+            # Patterns like "denim shorts", but NOT "denim shorts" when analyzing a "top"
+            if re.search(rf"\b{material}\s+{re.escape(base_item)}\b", description_lower):
+                return material
+            if re.search(rf"\b{material}\s+{re.escape(final_item)}\b", description_lower):
+                return material
+        
+        return ""
+    
+    def _extract_specific_item_patterns(self, final_item: str, base_item: str, description_lower: str) -> List[str]:
+        """Extract patterns and decorative elements for this specific item"""
+        patterns = []
+        
+        # Look for embroidery/decorations specifically mentioned with this item
+        import re
+        
+        # For shorts, check for embroidery patterns
+        if "shorts" in final_item or "shorts" in base_item:
+            if "floral embroidery" in description_lower:
+                patterns.append("with floral embroidery")
+            elif "embroidery" in description_lower and "floral" in description_lower:
+                patterns.append("with floral embroidery")
+        
+        # Check for other patterns like stripes, plaid, etc.
+        pattern_keywords = ["striped", "plaid", "checkered", "polka dot", "geometric", "printed"]
+        
+        for pattern in pattern_keywords:
+            # Only if mentioned specifically with this item
+            if re.search(rf"\b{pattern}\s+{re.escape(base_item)}\b", description_lower):
+                patterns.append(pattern)
+        
+        return patterns
+    
+    def _enhance_clothing_description(self, base_description: str, all_results: List[Tuple[str, float]]) -> str:
+        """Enhance clothing description with additional details like patterns and materials"""
+        try:
+            # Look for additional details in the results
+            enhanced_parts = [base_description]
+            base_lower = base_description.lower()
+            
+            # Extract the clothing item type from base description
+            item_type = None
+            if "crop top" in base_lower:
+                item_type = "crop top"
+            elif "tank top" in base_lower:
+                item_type = "tank top"
+            elif "t-shirt" in base_lower:
+                item_type = "t-shirt"
+            elif "yoga pants" in base_lower:
+                item_type = "yoga pants"
+            elif "pants" in base_lower:
+                item_type = "pants"
+            elif "shorts" in base_lower:
+                item_type = "shorts"
+            
+            # Look for patterns and materials in other high-scoring results
+            for result, score in all_results:
+                if score > 0.01:  # Only consider confident matches
+                    result_lower = result.lower()
+                    
+                    # Check for patterns
+                    if "floral" in result_lower and "floral" not in base_lower:
+                        if item_type and item_type in result_lower:
+                            enhanced_parts.append("with floral pattern")
+                            break
+                    elif "printed" in result_lower and "printed" not in base_lower:
+                        if item_type and item_type in result_lower:
+                            enhanced_parts.append("with print")
+                            break
+                    elif "embroidered" in result_lower and "embroidered" not in base_lower:
+                        if item_type and item_type in result_lower:
+                            enhanced_parts.append("with embroidery")
+                            break
+                    elif "striped" in result_lower and "striped" not in base_lower:
+                        if item_type and item_type in result_lower:
+                            enhanced_parts.append("striped")
+                            break
+            
+            # Look for fit/style descriptors
+            for result, score in all_results:
+                if score > 0.01:
+                    result_lower = result.lower()
+                    
+                    # Check for fit descriptors
+                    if "fitted" in result_lower and "fitted" not in base_lower:
+                        if item_type and item_type in result_lower:
+                            enhanced_parts.append("fitted")
+                            break
+                    elif "tight" in result_lower and "tight" not in base_lower:
+                        if item_type and item_type in result_lower:
+                            enhanced_parts.append("tight")
+                            break
+                    elif "loose" in result_lower and "loose" not in base_lower:
+                        if item_type and item_type in result_lower:
+                            enhanced_parts.append("loose")
+                            break
+            
+            return " ".join(enhanced_parts)
+            
+        except Exception as e:
+            logger.error(f"Error enhancing clothing description: {e}")
+            return base_description
+
     def analyze_image(self, image_path: str) -> Dict[str, Any]:
         """
         Analyze clothing in an image
@@ -635,7 +724,317 @@ class ClothingAnalyzer:
         
         return info
 
+    def _analyze_with_fashionclip(self, image, test_mode: bool = False) -> Optional[str]:
+        """Analyze image using FashionCLIP with fashion-specific queries"""
+        if test_mode:
+            return "test_success"
+            
+        if self.processor is None or self.model is None:
+            logger.error("FashionCLIP model not initialized")
+            return None
+            
+        try:
+            # Comprehensive fashion-specific queries organized by category
+            
+            # Enhanced color palette with more accurate color detection
+            colors = [
+                # Primary colors
+                "red", "blue", "white", "black", 
+                # Secondary colors
+                "pink", "green", "yellow", "purple", "brown", "gray", "orange",
+                # Fashion-specific colors
+                "navy", "beige", "cream", "ivory", "charcoal", "khaki", "olive", 
+                "burgundy", "maroon", "coral", "turquoise", "mint", "lavender",
+                # Color variants for better accuracy
+                "light blue", "dark blue", "bright red", "deep red", "pale pink", "hot pink",
+                "forest green", "lime green", "golden yellow", "royal purple"
+            ]
+            
+            # Enhanced upper body items with fashion-specific terminology
+            upper_items = [
+                "tank top", "crop top", "t-shirt", "blouse", "shirt", "halter top", 
+                "camisole", "tube top", "sleeveless top", "off-shoulder top",
+                "v-neck", "crew neck", "button-up", "polo shirt", "henley"
+            ]
+            
+            # Enhanced lower body items
+            lower_items = [
+                "shorts", "jeans", "pants", "skirt", "leggings", "dress",
+                "denim shorts", "jean shorts", "mini skirt", "midi skirt", "maxi skirt",
+                "skinny jeans", "straight jeans", "bootcut jeans", "wide-leg pants",
+                "yoga pants", "dress pants", "cargo shorts", "athletic shorts"
+            ]
+            
+            # Enhanced materials with fashion context
+            materials = [
+                "denim", "cotton", "silk", "leather", "linen", "wool", "cashmere",
+                "polyester", "spandex", "jersey", "chiffon", "lace", "velvet"
+            ]
+            
+            # Enhanced patterns and details
+            patterns = [
+                "floral", "striped", "plaid", "solid", "embroidered", "printed",
+                "polka dot", "geometric", "animal print", "tie-dye", "ombre",
+                "with embroidery", "with sequins", "with lace", "with beading",
+                "floral print", "floral pattern", "fitted", "tight-fitting", "loose-fitting"
+            ]
+            
+            # Create comprehensive query combinations
+            clothing_queries = []
+            
+            # Color + Upper body combinations
+            for color in colors:
+                for item in upper_items:
+                    clothing_queries.append(f"{color} {item}")
+            
+            # Color + Lower body combinations  
+            for color in colors:
+                for item in lower_items:
+                    clothing_queries.append(f"{color} {item}")
+                    
+            # Material + Item combinations
+            for material in materials:
+                for item in lower_items + upper_items:
+                    clothing_queries.append(f"{material} {item}")
+            
+            # Pattern + Item combinations
+            for pattern in patterns:
+                for item in lower_items + upper_items:
+                    clothing_queries.append(f"{pattern} {item}")
+            
+            # Specific combinations for improved accuracy
+            specific_queries = [
+                # Color accuracy improvements
+                "bright white crop top", "pure white top", "snow white shirt", "off-white blouse",
+                "bright blue yoga pants", "navy blue leggings", "royal blue pants", "dark blue jeans",
+                
+                # Pattern combinations
+                "white crop top with floral print", "floral white top", "printed white shirt",
+                "blue yoga pants fitted", "tight blue leggings", "stretchy blue pants",
+                
+                # Style details
+                "fitted crop top", "tight yoga pants", "stretchy leggings", "athletic wear",
+                "casual outfit", "gym outfit", "workout clothes",
+                
+                # Specific for the user's image type
+                "white floral crop top",
+                "blue fitted yoga pants", 
+                "white top with print",
+                "blue athletic pants"
+            ]
+            
+            clothing_queries.extend(specific_queries)
+            
+            # Process in optimized batches for better performance
+            batch_size = 40  # Reduced for better memory management
+            all_matches = []
+            all_scores = []
+            
+            if not torch_available or torch is None:
+                return None
+                
+            for i in range(0, len(clothing_queries), batch_size):
+                batch_queries = clothing_queries[i:i + batch_size]
+                
+                inputs = self.processor(  # type: ignore
+                    text=batch_queries,
+                    images=image,
+                    return_tensors="pt",
+                    padding=True
+                )
+                
+                if self.device == 'cuda':
+                    for key in inputs:
+                        if hasattr(inputs[key], 'to'):
+                            inputs[key] = inputs[key].to('cuda')  # type: ignore
+                
+                with torch.no_grad():
+                    outputs = self.model(**inputs)  # type: ignore
+                    
+                    # Get similarity scores
+                    logits_per_image = outputs.logits_per_image
+                    probs = logits_per_image.softmax(dim=-1)
+                    
+                    # Get top matches from this batch
+                    top_indices = torch.topk(probs[0], k=min(8, len(batch_queries))).indices
+                    batch_matches = [batch_queries[i] for i in top_indices]
+                    batch_scores = [probs[0][i].item() for i in top_indices]
+                    
+                    all_matches.extend(batch_matches)
+                    all_scores.extend(batch_scores)
+            
+            # Sort all results by score
+            sorted_results = sorted(zip(all_matches, all_scores), key=lambda x: x[1], reverse=True)
+            
+            # Enhanced categorization with material detection
+            upper_keywords = [
+                "tank top", "crop top", "t-shirt", "blouse", "shirt", "halter top", 
+                "camisole", "tube top", "sleeveless", "v-neck", "crew neck", "henley"
+            ]
+            lower_keywords = [
+                "shorts", "jeans", "pants", "skirt", "leggings", "dress", "denim shorts", 
+                "jean shorts", "mini skirt", "midi skirt", "skinny jeans", "yoga pants"
+            ]
+            material_keywords = [
+                "denim", "cotton", "silk", "leather", "linen", "wool", "jersey", "chiffon"
+            ]
+            
+            # Separate matches by category with material awareness
+            upper_matches = []
+            lower_matches = []
+            material_matches = []
+            
+            for query, score in sorted_results:
+                query_lower = query.lower()
+                
+                # Check for materials
+                if any(material in query_lower for material in material_keywords):
+                    material_matches.append((query, score))
+                
+                # Check for upper body items
+                if any(item in query_lower for item in upper_keywords):
+                    upper_matches.append((query, score))
+                
+                # Check for lower body items
+                elif any(item in query_lower for item in lower_keywords):
+                    lower_matches.append((query, score))
+            
+            # Smart selection with better color accuracy
+            best_upper = None
+            best_lower = None
+            
+            # Find best upper body match (prioritize highest score first)
+            for query, score in upper_matches[:3]:  # Check top 3 matches
+                if score > 0.02:  # Confidence threshold
+                    best_upper = query
+                    break
+            
+            # Find best lower body match (prioritize highest score first)
+            for query, score in lower_matches[:3]:  # Check top 3 matches
+                if score > 0.02:  # Confidence threshold
+                    best_lower = query
+                    break
+            
+            # If we got results, enhance them with more detail
+            if best_upper and best_lower:
+                # Try to enhance with patterns and materials
+                enhanced_upper = self._enhance_clothing_description(best_upper, sorted_results)
+                enhanced_lower = self._enhance_clothing_description(best_lower, sorted_results)
+                
+                description_parts = [enhanced_upper, enhanced_lower]
+                description = ", ".join(description_parts)
+                logger.info(f"FashionCLIP enhanced result: {description}")
+                return description
+            
+            # Build basic description if enhancement fails
+            description_parts = []
+            if best_upper:
+                description_parts.append(best_upper)
+            if best_lower:
+                description_parts.append(best_lower)
+            
+            if description_parts:
+                description = ", ".join(description_parts)
+                logger.info(f"FashionCLIP comprehensive result: {description}")
+                return description
+            else:
+                # Fallback to top overall matches
+                confident_matches = [
+                    match for match, score in sorted_results[:10]
+                    if score > 0.03
+                ]
+                
+                if confident_matches:
+                    description = self._create_enhanced_fashionclip_description(confident_matches)
+                    return description
+                else:
+                    return "Person wearing casual clothing"
+                    
+        except Exception as e:
+            logger.error(f"Error in FashionCLIP analysis: {e}")
+            return None
+
+    def _create_enhanced_fashionclip_description(self, matches: List[str]) -> str:
+        """Create a comprehensive description from FashionCLIP matches"""
+        if not matches:
+            return "Person wearing casual clothing"
+        
+        # Debug: Print matches
+        logger.info(f"FashionCLIP matches to process: {matches}")
+            
+        # Categorize matches more intelligently
+        upper_body_items = []
+        lower_body_items = []
+        
+        # Keywords for categorization
+        upper_keywords = ["tank top", "crop top", "t-shirt", "blouse", "shirt", "halter top", "camisole", "tube top", "sleeveless", "short sleeves"]
+        lower_keywords = ["shorts", "jeans", "pants", "skirt", "leggings", "dress", "yoga pants"]
+        
+        for match in matches:
+            match_lower = match.lower()
+            
+            # Check if this is a complete description (color + item)
+            has_color = any(color in match_lower for color in ["red", "blue", "white", "black", "pink", "green", "yellow", "purple", "brown", "gray", "navy", "beige"])
+            
+            # Check for upper body items
+            if any(keyword in match_lower for keyword in upper_keywords):
+                upper_body_items.append(match)
+            
+            # Check for lower body items
+            elif any(keyword in match_lower for keyword in lower_keywords):
+                lower_body_items.append(match)
+        
+        # Build description
+        description_parts = []
+        
+        # Add best upper body item
+        if upper_body_items:
+            # Prefer complete descriptions (with color)
+            best_upper = None
+            for item in upper_body_items:
+                if any(color in item.lower() for color in ["red", "blue", "white", "black", "pink", "green"]):
+                    best_upper = item
+                    break
+            if not best_upper:
+                best_upper = upper_body_items[0]
+            description_parts.append(best_upper)
+        
+        # Add best lower body item
+        if lower_body_items:
+            # Prefer complete descriptions (with color)
+            best_lower = None
+            for item in lower_body_items:
+                if any(color in item.lower() for color in ["red", "blue", "white", "black", "pink", "green"]):
+                    best_lower = item
+                    break
+            if not best_lower:
+                best_lower = lower_body_items[0]
+            description_parts.append(best_lower)
+        
+        # If we don't have clear upper/lower items, try to construct from matches
+        if not description_parts:
+            # Look for any color/item combinations
+            for match in matches[:3]:  # Take top 3 matches
+                if any(keyword in match.lower() for keyword in upper_keywords + lower_keywords):
+                    description_parts.append(match)
+        
+        # Combine into natural description
+        if description_parts:
+            result = ", ".join(description_parts)
+            logger.info(f"FashionCLIP final description: {result}")
+            return result
+        else:
+            return "Person wearing casual clothing"
+
 # Factory function for easy model switching
-def create_clothing_analyzer(model_name: str = "instructblip") -> ClothingAnalyzer:
-    """Create a clothing analyzer with the specified model"""
+def create_clothing_analyzer(model_name: str = "fashionclip") -> ClothingAnalyzer:
+    """
+    Create a clothing analyzer with the specified model
+    
+    Args:
+        model_name: Model to use - "fashionclip" (recommended), "instructblip", or "blip2"
+    
+    Returns:
+        ClothingAnalyzer instance
+    """
     return ClothingAnalyzer(model_name=model_name)

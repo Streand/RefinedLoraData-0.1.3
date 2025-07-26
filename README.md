@@ -1,5 +1,8 @@
 Versions:
 
+0.3.1 - Clothing detection Beta = ❌
+ - fixing code
+
 0.3.0 - Clothing detection Beta = ✅
  - added "Clothing" section
 

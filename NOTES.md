@@ -1,0 +1,9 @@
+Fix start up logs:
+
+Activating virtual environment...
+Starting RefinedLoraData-0.1.0...
+Starting RefinedLoraData-0.1.0...
+
+-----------------------------------------------------------
+
+
